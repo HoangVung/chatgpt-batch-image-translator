@@ -701,25 +701,7 @@ def is_generating(page):
     except Exception:
         pass
 
-    try:
-        text = page.locator("body").inner_text(timeout=1000).lower()
-        markers = [
-            "analyzing image",
-            "đang phân tích",
-            "thinking...",
-            "thinking…",
-            "đang suy nghĩ",
-            "creating image",
-            "đang tạo ảnh",
-            "generating",
-            "đang tạo",
-            "working on it",
-            "i’m working",
-            "i'm working"
-        ]
-        return any(m in text for m in markers)
-    except Exception:
-        return False
+    return False
 
 
 def has_clear_generation_error(page):
@@ -1020,11 +1002,13 @@ def wait_response_after_send(page, timeout_start=90, timeout_done=900, resend_te
     print("⏳ Chờ ChatGPT xử lý xong...")
 
     start = time.time()
+    last_log = 0
 
     while time.time() - start < timeout_done:
         wait_if_cloudflare(page)
 
         if before_signature and has_new_assistant_response(page, before_signature):
+            print("  ✓ Phát hiện phản hồi mới, chờ ổn định...")
             return wait_assistant_response_stable(
                 page,
                 before_signature,
@@ -1035,7 +1019,15 @@ def wait_response_after_send(page, timeout_start=90, timeout_done=900, resend_te
         if not is_generating(page):
             sleep(5)
             if not is_generating(page):
+                print("  ✓ ChatGPT đã dừng xử lý")
                 return True
+
+        elapsed = int(time.time() - start)
+        if time.time() - last_log >= 30:
+            gen = is_generating(page)
+            has_new = has_new_assistant_response(page, before_signature) if before_signature else False
+            print(f"  ⏳ Đang chờ... {elapsed}s | generating={gen} | new_response={has_new}")
+            last_log = time.time()
 
         sleep(2)
 
@@ -1354,14 +1346,18 @@ def main():
             login_if_needed(page)
 
             for img in batch:
-                index = images.index(img) + 1
-                save_name = get_output_name(img)
-
                 try:
+                    index = images.index(img) + 1
+                    save_name = get_output_name(img)
                     process_one(page, images, img)
 
                 except Exception as e:
-                    print("✗ Lỗi:", e)
+                    index = getattr(img, '_batch_index', 0) or (images.index(img) + 1 if img in images else 0)
+                    try:
+                        save_name = get_output_name(img)
+                    except Exception:
+                        save_name = img.stem + "_VN.png"
+                    print(f"✗ Lỗi: {e}")
                     write_progress(index, img.name, save_name, "fail", str(e))
 
                 print(f"⏸ Nghỉ {WAIT_AFTER_EACH_IMAGE} giây")
