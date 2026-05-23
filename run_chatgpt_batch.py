@@ -5,9 +5,12 @@ import csv
 import json
 import base64
 import functools
+import shutil
 from pathlib import Path
 from datetime import datetime
 from playwright.sync_api import sync_playwright
+from layout_validator import validate_layout_classified
+from svg_renderer import render_svg, export_svg_to_formats
 
 try:
     import pygetwindow as gw
@@ -33,8 +36,60 @@ DEFAULT_CONFIG = {
     "download_folder": str(BASE_DIR / "images_vn"),
     "profile_dir": str(BASE_DIR / "chatgpt_auto_profile"),
     "batch_size": "5",
-    "start_from": ""
+    "start_from": "",
+    "prompt_chep_lai": "chép lại nguyên văn",
+    "prompt_dich": "dịch bản chép lại",
+    "prompt_tao_anh": "tạo ảnh với bản dịch",
+    "prompt_svg_instruction": "Trong cuộc chat này, khi tôi yêu cầu tạo ảnh/SVG với bản dịch: hãy tạo file SVG theo bố cục ảnh gốc, tự kiểm tra và sửa chữ chồng chữ/tràn khung trước khi gửi, câu dài phải xuống dòng và giữ giãn dòng hợp lý. Chỉ gửi link tải SVG cuối cùng.",
+    "prompt_svg_json_layout": """Dựa trên ảnh gốc và bản dịch tiếng Việt ở trên, hãy xuất JSON_LAYOUT để app local dựng SVG.
+
+Yêu cầu bắt buộc:
+- Không tạo ảnh.
+- Không viết SVG.
+- Chỉ xuất một khối JSON hợp lệ, không giải thích thêm.
+- Giữ đủ 100% nội dung bản dịch.
+- Không bỏ tiêu đề, đoạn văn, bảng, số liệu, mũi tên, chú thích.
+- Chia trang thành các block: title, paragraph, table, arrow, figure, caption, formula.
+- Mỗi block phải có x, y, width, height theo hệ tọa độ trang.
+- Page size mặc định: width = 2480, height = 3508.
+- Với paragraph: chia sẵn thành nhiều dòng ngắn, mỗi dòng không quá 42 ký tự tiếng Việt.
+- Với table: xuất rõ số dòng, số cột, nội dung từng ô, căn trái/phải/giữa.
+- Với số tiền: giữ nguyên định dạng số, dấu phẩy, dấu ngoặc, và căn phải.
+- Với mũi tên: xuất x1, y1, x2, y2, direction, label nếu có.
+- Với công thức: giữ nguyên ký hiệu toán học/kế toán.
+- Không dùng foreignObject.
+- Nếu không chắc tọa độ tuyệt đối, hãy ước lượng theo tỷ lệ gần nhất với ảnh gốc.
+
+Schema bắt buộc:
+{
+  "page": {
+    "width": 2480,
+    "height": 3508,
+    "background": "#ffffff"
+  },
+  "meta": {
+    "sourceFile": "",
+    "language": "vi",
+    "layoutType": "accounting_page"
+  },
+  "blocks": []
+}""",
+    "output_mode": "image",
+    "export_png_preview": "True",
+    "export_pdf": "False"
 }
+
+
+def prompt_value(env_key, cfg, cfg_key):
+    value = os.getenv(env_key, "").strip()
+    if value:
+        return value
+
+    value = str(cfg.get(cfg_key, "")).strip()
+    if value:
+        return value
+
+    return DEFAULT_CONFIG[cfg_key]
 
 
 def load_config():
@@ -53,6 +108,15 @@ def load_config():
     cfg["batch_size"] = int(os.getenv("BATCH_SIZE", cfg.get("batch_size", "5")))
     cfg["run_mode"] = os.getenv("RUN_MODE", "main")
     cfg["start_from"] = os.getenv("START_FROM", cfg.get("start_from", "")).strip()
+    cfg["prompt_chep_lai"] = prompt_value("PROMPT_CHEP_LAI", cfg, "prompt_chep_lai")
+    cfg["prompt_dich"] = prompt_value("PROMPT_DICH", cfg, "prompt_dich")
+    cfg["prompt_svg_instruction"] = prompt_value("PROMPT_SVG_INSTRUCTION", cfg, "prompt_svg_instruction")
+    cfg["prompt_tao_anh"] = prompt_value("PROMPT_TAO_ANH", cfg, "prompt_tao_anh")
+    cfg["prompt_svg_json_layout"] = prompt_value("PROMPT_SVG_JSON_LAYOUT", cfg, "prompt_svg_json_layout")
+    cfg["output_mode"] = os.getenv("OUTPUT_MODE", cfg.get("output_mode", "image")).strip().lower()
+
+    cfg["export_png_preview"] = os.getenv("EXPORT_PNG_PREVIEW", str(cfg.get("export_png_preview", "True"))).strip().lower() == "true"
+    cfg["export_pdf"] = os.getenv("EXPORT_PDF", str(cfg.get("export_pdf", "False"))).strip().lower() == "true"
 
     return cfg
 
@@ -66,15 +130,26 @@ BATCH_SIZE = CFG["batch_size"]
 RUN_MODE = CFG["run_mode"]
 START_FROM = CFG["start_from"]
 
+# OUTPUT_MODE:
+# - "image": chạy như cũ, ChatGPT tạo ảnh và app tải ảnh.
+# - "svg_json": AI xuất JSON_LAYOUT, app local dựng SVG.
+OUTPUT_MODE = CFG.get("output_mode", "image")
+EXPORT_PNG_PREVIEW = CFG.get("export_png_preview", True)
+EXPORT_PDF = CFG.get("export_pdf", False)
+
 WAIT_AFTER_EACH_IMAGE = 30
 MAX_RETRY_IMAGE = 3
 MAX_RETRY_DICH = 3
 IMAGE_WAIT_TIMEOUT = 1800
 SEND_VERIFY_TIMEOUT = 45
 
-PROMPT_CHEP_LAI = "chép lại nguyên văn"
-PROMPT_DICH = "dịch bản chép lại"
-PROMPT_TAO_ANH = "Tạo ảnh với bản dịch"
+PROMPT_CHEP_LAI = CFG["prompt_chep_lai"]
+PROMPT_DICH = CFG["prompt_dich"]
+PROMPT_SVG_INSTRUCTION = CFG["prompt_svg_instruction"]
+PROMPT_TAO_ANH = CFG["prompt_tao_anh"]
+PROMPT_SVG_JSON_LAYOUT = CFG["prompt_svg_json_layout"]
+if not PROMPT_SVG_INSTRUCTION.strip() and PROMPT_TAO_ANH.lower().strip() in ["tạo ảnh với bản dịch", "tạo ảnh với bản dịch."]:
+    PROMPT_TAO_ANH = "Tạo file SVG với bản dịch theo bố cục ảnh gốc"
 
 IMAGE_EXTS = [".png", ".jpg", ".jpeg", ".webp"]
 PROGRESS_FILE = os.path.join(DOWNLOAD_FOLDER, "progress.csv")
@@ -84,10 +159,26 @@ def sleep(s):
     time.sleep(s)
 
 
+def ensure_output_dirs():
+    output_dir = BASE_DIR / "output"
+    subdirs = [
+        "images_vn",
+        "json_layout",
+        "svg",
+        "png_preview",
+        "pdf",
+        "logs",
+        "failed"
+    ]
+    for sd in subdirs:
+        os.makedirs(output_dir / sd, exist_ok=True)
+
+
 def ensure_dirs():
     os.makedirs(IMAGE_FOLDER, exist_ok=True)
     os.makedirs(DOWNLOAD_FOLDER, exist_ok=True)
     os.makedirs(PROFILE_DIR, exist_ok=True)
+    ensure_output_dirs()
 
 
 def init_progress():
@@ -216,12 +307,32 @@ def write_progress(index, file_name, output_name, status, note=""):
         ])
 
 
+def get_svg_name_from_png(png_name):
+    if png_name.endswith(".png"):
+        return png_name[:-4] + ".svg"
+    return png_name + ".svg"
+
+
 def output_file_exists(img):
     try:
+        if OUTPUT_MODE == "svg_json":
+            svg_path = os.path.join(BASE_DIR, "output", "svg", f"{img.stem}.svg")
+            if os.path.exists(svg_path) and os.path.getsize(svg_path) > 100:
+                return True
+            return False
+
         output_name = get_output_name(img)
         output_path = os.path.join(DOWNLOAD_FOLDER, output_name)
 
-        return os.path.exists(output_path) and os.path.getsize(output_path) > 10000
+        if os.path.exists(output_path) and os.path.getsize(output_path) > 10000:
+            return True
+
+        svg_name = get_svg_name_from_png(output_name)
+        svg_path = os.path.join(DOWNLOAD_FOLDER, svg_name)
+        if os.path.exists(svg_path) and os.path.getsize(svg_path) > 100:
+            return True
+
+        return False
     except Exception:
         return False
 
@@ -1034,7 +1145,7 @@ def wait_response_after_send(page, timeout_start=90, timeout_done=900, resend_te
     return False
 
 
-def get_all_image_srcs(page):
+def get_all_outputs(page):
     try:
         return page.evaluate("""
             () => {
@@ -1043,6 +1154,7 @@ def get_all_image_srcs(page):
                 const seen = new Set();
                 const result = [];
 
+                // 1. Raster images
                 for (const img of Array.from(document.querySelectorAll('img'))) {
                     if (composer && composer.contains(img)) continue;
 
@@ -1064,20 +1176,119 @@ def get_all_image_srcs(page):
                     if (seen.has(src)) continue;
 
                     seen.add(src);
-                    result.push(src);
+                    result.push({ kind: "raster", value: src });
+                }
+
+                // Helper to check if an element is inside composer, sidebar, nav, header, or generic UI we want to skip
+                const shouldSkip = (el) => {
+                    if (composer && composer.contains(el)) return true;
+
+                    let cur = el;
+                    while (cur) {
+                        const tag = cur.tagName.toLowerCase();
+                        const id = (cur.id || '').toLowerCase();
+                        const cls = (cur.getAttribute('class') || '').toLowerCase();
+                        const role = (cur.getAttribute('role') || '').toLowerCase();
+                        const testid = (cur.getAttribute('data-testid') || '').toLowerCase();
+
+                        if (
+                            tag === 'nav' || tag === 'header' || role === 'navigation' ||
+                            id.includes('sidebar') || cls.includes('sidebar') || testid.includes('sidebar') ||
+                            testid.includes('profile') || testid.includes('user')
+                        ) {
+                            return true;
+                        }
+                        cur = cur.parentElement;
+                    }
+                    return false;
+                };
+
+                // 2. SVG links and buttons
+                const candidates = Array.from(document.querySelectorAll('a, button, [role="link"], [role="button"], [download]'));
+                let linkIdx = 0;
+                for (const el of candidates) {
+                    if (shouldSkip(el)) continue;
+
+                    const rawHref = el.getAttribute('href') || '';
+                    const rawText = (el.innerText || el.textContent || '').trim();
+                    const rawDownload = el.getAttribute('download') || '';
+                    const rawTitle = el.getAttribute('title') || '';
+                    const ariaLabel = el.getAttribute('aria-label') || '';
+                    const testid = el.getAttribute('data-testid') || '';
+                    const role = el.getAttribute('role') || '';
+                    const outerHTML = el.outerHTML ? el.outerHTML.slice(0, 300) : '';
+
+                    const href = rawHref.toLowerCase();
+                    const text = rawText.toLowerCase();
+                    const downloadAttr = rawDownload.toLowerCase();
+                    const titleAttr = rawTitle.toLowerCase();
+
+                    // Keywords matching: svg, download, tải, tệp, vector, xml
+                    const matchesKeyword = (
+                        href.includes('svg') || href.includes('download') || href.startsWith('blob:') ||
+                        text.includes('svg') || text.includes('.svg') || text.includes('download') || text.includes('tải') || text.includes('tài') || text.includes('tệp') || text.includes('vector') || text.includes('xml') ||
+                        downloadAttr.includes('svg') || downloadAttr.includes('.svg') || downloadAttr.includes('download') ||
+                        titleAttr.includes('svg') || titleAttr.includes('download')
+                    );
+
+                    const isGenerating = (
+                        text.includes('generating') || text.includes('đang tạo') || 
+                        outerHTML.toLowerCase().includes('loading-shimmer')
+                    );
+
+                    if (matchesKeyword && !isGenerating) {
+                        let id = el.getAttribute('data-svg-id');
+                        if (!id) {
+                            linkIdx++;
+                            id = `svg-lnk-${Date.now()}-${linkIdx}-${Math.random().toString(36).substr(2, 5)}`;
+                            el.setAttribute('data-svg-id', id);
+                        }
+                        const tag = el.tagName.toLowerCase();
+                        const selector = `${tag}[data-svg-id="${id}"]`;
+
+                        const itemKey = `svg_download:${href}:${text}`;
+                        if (!seen.has(itemKey)) {
+                            seen.add(itemKey);
+                            result.push({
+                                kind: "svg_download",
+                                value: rawHref || rawText,
+                                href: rawHref,
+                                selector: selector,
+                                text: rawText,
+                                download: rawDownload,
+                                title: rawTitle,
+                                ariaLabel: ariaLabel,
+                                testid: testid,
+                                role: role,
+                                outerHTML: outerHTML
+                            });
+                        }
+                    }
                 }
 
                 return result;
             }
         """)
-    except Exception:
+    except Exception as e:
+        print(f"⚠ Lỗi get_all_outputs: {e}")
         return []
 
 
-def get_latest_new_image(page, old_list):
-    current = get_all_image_srcs(page)
-    new_imgs = [x for x in current if x not in old_list]
-    return new_imgs[-1] if new_imgs else None
+def get_outcome_sig(item):
+    if item.get("kind") == "raster":
+        return ("raster", item.get("value"))
+    else:
+        return ("svg_download", item.get("value"), item.get("text"))
+
+
+def get_latest_new_outcome(page, old_sigs):
+    current = get_all_outputs(page)
+    new_outcomes = []
+    for item in current:
+        sig = get_outcome_sig(item)
+        if sig not in old_sigs:
+            new_outcomes.append(item)
+    return new_outcomes[-1] if new_outcomes else None
 
 
 def run_dich_step(page):
@@ -1118,16 +1329,16 @@ def run_dich_step(page):
     return False
 
 
-def wait_image_generation_finished_or_image_ready(page, old_imgs, timeout=IMAGE_WAIT_TIMEOUT):
+def wait_image_generation_finished_or_image_ready(page, old_sigs, timeout=IMAGE_WAIT_TIMEOUT):
     """
-    Chờ riêng cho bước tạo ảnh theo kiểu KHÓA CỨNG.
+    Chờ riêng cho bước tạo ảnh/tệp theo kiểu KHÓA CỨNG.
 
     Nguyên tắc mới:
-    - Sau khi đã gửi prompt tạo ảnh thì KHÔNG retry sớm.
+    - Sau khi đã gửi prompt tạo ảnh/tệp thì KHÔNG retry sớm.
     - Không dựa vào việc mất nút Stop để kết luận fail.
     - Không dựa vào idle tạm thời để retry.
     - Chỉ thoát khi:
-        1. Có ảnh mới;
+        1. Có kết quả mới (ảnh/SVG);
         2. Có lỗi rõ ràng trên màn hình và đã chờ thêm đủ lâu;
         3. Hết timeout dài IMAGE_WAIT_TIMEOUT.
     """
@@ -1138,25 +1349,25 @@ def wait_image_generation_finished_or_image_ready(page, old_imgs, timeout=IMAGE_
     while time.time() - start < timeout:
         wait_if_cloudflare(page)
 
-        img_url = get_latest_new_image(page, old_imgs)
-        if img_url:
-            print("✓ Có ảnh mới")
-            return img_url
+        outcome = get_latest_new_outcome(page, old_sigs)
+        if outcome:
+            print(f"✓ Có kết quả mới: {outcome.get('kind')}")
+            return outcome
 
         elapsed = int(time.time() - start)
 
         if has_clear_generation_error(page):
             if first_clear_error_time is None:
                 first_clear_error_time = time.time()
-                print("⚠ Phát hiện thông báo lỗi tạo ảnh, chờ thêm để chắc chắn...")
+                print("⚠ Phát hiện thông báo lỗi tạo ảnh/tệp, chờ thêm để chắc chắn...")
 
-            # Có lỗi rõ ràng thì vẫn chờ thêm 90 giây, vì đôi khi ảnh vẫn ra muộn.
+            # Có lỗi rõ ràng thì vẫn chờ thêm 90 giây, vì đôi khi ảnh/SVG vẫn ra muộn.
             if time.time() - first_clear_error_time >= 90:
-                img_url = get_latest_new_image(page, old_imgs)
-                if img_url:
-                    print("✓ Có ảnh mới")
-                    return img_url
-                print("⚠ Lỗi tạo ảnh rõ ràng và không có ảnh sau khi chờ thêm")
+                outcome = get_latest_new_outcome(page, old_sigs)
+                if outcome:
+                    print(f"✓ Có kết quả mới: {outcome.get('kind')}")
+                    return outcome
+                print("⚠ Lỗi tạo ảnh/tệp rõ ràng và không có kết quả sau khi chờ thêm")
                 return None
         else:
             first_clear_error_time = None
@@ -1164,21 +1375,25 @@ def wait_image_generation_finished_or_image_ready(page, old_imgs, timeout=IMAGE_
         # Log định kỳ, không kết luận fail khi idle.
         if time.time() - last_log >= 30:
             state = "đang xử lý" if is_generating(page) else "chưa có tín hiệu xử lý rõ, vẫn tiếp tục chờ"
-            print(f"  ⏳ Chờ ảnh mới... {elapsed}s | trạng thái: {state}")
+            all_outs = get_all_outputs(page)
+            print(f"  ⏳ Chờ kết quả mới... {elapsed}s | trạng thái: {state} | Quét được {len(all_outs)} outputs")
+            for item in all_outs[:5]:
+                print(f"    - Output: kind={item.get('kind')}, text='{item.get('text', '').strip()}', value='{item.get('value', '')[:100]}'")
             last_log = time.time()
 
         sleep(10)
 
-    print("⚠ Hết timeout dài nhưng chưa thấy ảnh mới")
+    print("⚠ Hết timeout dài nhưng chưa thấy kết quả mới")
     return None
 
 
-def try_create_image(page, old_imgs):
+def try_create_image(page, old_sigs):
     for attempt in range(1, MAX_RETRY_IMAGE + 1):
-        print(f"→ Tạo ảnh lần {attempt}")
+        print(f"→ Tạo ảnh/tệp lần {attempt}")
 
-        before_send_imgs = get_all_image_srcs(page)
-        merged_old_imgs = list(dict.fromkeys(old_imgs + before_send_imgs))
+        before_send_outputs = get_all_outputs(page)
+        before_send_sigs = {get_outcome_sig(x) for x in before_send_outputs}
+        merged_old_sigs = old_sigs.union(before_send_sigs)
 
         send_prompt(page, PROMPT_TAO_ANH, max_send_attempts=1)
 
@@ -1186,34 +1401,34 @@ def try_create_image(page, old_imgs):
         # Sau đó chuyển sang hàm chờ ảnh riêng bên dưới.
         started = False
         start = time.time()
-        print("⏳ Chờ ChatGPT bắt đầu tạo ảnh...")
+        print("⏳ Chờ ChatGPT bắt đầu tạo...")
         while time.time() - start < 120:
             wait_if_cloudflare(page)
             if is_generating(page):
                 started = True
                 break
-            img_url = get_latest_new_image(page, merged_old_imgs)
-            if img_url:
-                print("✓ Có ảnh mới")
-                return img_url
+            outcome = get_latest_new_outcome(page, merged_old_sigs)
+            if outcome:
+                print(f"✓ Có kết quả mới: {outcome.get('kind')}")
+                return outcome
             sleep(2)
 
         if not started:
             current_text = get_prompt_text(page)
             if PROMPT_TAO_ANH in current_text:
-                raise Exception("Prompt tạo ảnh vẫn còn trong ô nhập sau khi gửi; dừng để tránh gửi trùng.")
+                raise Exception("Prompt tạo ảnh/tệp vẫn còn trong ô nhập sau khi gửi; dừng để tránh gửi trùng.")
 
-        img_url = wait_image_generation_finished_or_image_ready(
+        outcome = wait_image_generation_finished_or_image_ready(
             page,
-            merged_old_imgs,
+            merged_old_sigs,
             timeout=IMAGE_WAIT_TIMEOUT
         )
 
-        if img_url:
-            return img_url
+        if outcome:
+            return outcome
 
         # Trước khi retry lần sau, chờ chắc chắn ChatGPT đã thật sự dừng.
-        print("⚠ Chưa lấy được ảnh → chuẩn bị retry, chờ ChatGPT idle chắc chắn")
+        print("⚠ Chưa lấy được kết quả → chuẩn bị retry, chờ ChatGPT idle chắc chắn")
         idle_start = time.time()
         while time.time() - idle_start < 120:
             wait_if_cloudflare(page)
@@ -1268,37 +1483,688 @@ def download_image(page, url, path):
 
     raise Exception("Không tải được ảnh")
 
+def read_downloaded_svg_preview(path, limit=200):
+    try:
+        with open(path, "r", encoding="utf-8", errors="ignore") as f:
+            return f.read(limit).replace("\n", " ").strip()
+    except Exception:
+        return ""
+
+
+def ensure_downloaded_svg(path):
+    if not os.path.exists(path):
+        raise Exception("File SVG chưa được ghi ra ổ đĩa")
+
+    size = os.path.getsize(path)
+    if size <= 100:
+        raise Exception(f"File SVG quá nhỏ ({size} bytes)")
+
+    preview = read_downloaded_svg_preview(path)
+    try:
+        with open(path, "r", encoding="utf-8", errors="ignore") as f:
+            content = f.read()
+    except Exception as e:
+        raise Exception(f"Không đọc được SVG sau khi tải: {e}")
+
+    if "<svg" not in content.lower():
+        raise Exception(f"Nội dung tải về không phải SVG. Đoạn đầu: {preview}")
+
+
+def write_data_url_to_file(data_url, path):
+    header, payload = data_url.split(",", 1)
+    if ";base64" in header.lower():
+        data = base64.b64decode(payload)
+    else:
+        data = unquote_to_bytes(payload)
+    with open(path, "wb") as f:
+        f.write(data)
+
+
+def normalize_download_href(page, href):
+    if not href:
+        return ""
+    return page.evaluate(
+        """(href) => new URL(href, window.location.origin).toString()""",
+        href
+    )
+
+
+def is_fetchable_href(href):
+    if not href:
+        return False
+
+    low = href.strip().lower()
+    return (
+        low.startswith("http://") or
+        low.startswith("https://") or
+        low.startswith("/backend-api/") or
+        low.startswith("backend-api/") or
+        low.startswith("blob:") or
+        low.startswith("data:image")
+    )
+
+
+def fetch_svg_href(page, href, temp_path):
+    url = normalize_download_href(page, href)
+    if not url:
+        raise Exception("Không có href để fetch")
+
+    if url.startswith("data:image"):
+        print("  ↳ Tải SVG từ data URL")
+        write_data_url_to_file(url, temp_path)
+        ensure_downloaded_svg(temp_path)
+        return True
+
+    print(f"  ↳ Tải SVG từ href: {url[:160]}")
+    result = page.evaluate("""
+        async (u) => {
+            const r = await fetch(u, { credentials: 'include' });
+            const text = await r.text();
+            return {
+                ok: r.ok,
+                status: r.status,
+                url: r.url,
+                contentType: r.headers.get('content-type') || '',
+                text
+            };
+        }
+    """, url)
+
+    text = result.get("text") or ""
+    with open(temp_path, "w", encoding="utf-8", newline="") as f:
+        f.write(text)
+
+    if not result.get("ok"):
+        preview = text[:200].replace("\n", " ").strip()
+        raise Exception(
+            f"Fetch SVG HTTP {result.get('status')} | type={result.get('contentType')} | đoạn đầu: {preview}"
+        )
+
+    ensure_downloaded_svg(temp_path)
+    return True
+
+
+def find_svg_href_by_selector_or_text(page, selector):
+    return page.evaluate("""
+        (sel) => {
+            const fromSelector = sel ? document.querySelector(sel) : null;
+            const candidates = [
+                fromSelector,
+                ...Array.from(document.querySelectorAll('a, [role="link"], button, [role="button"], [download]'))
+            ].filter(Boolean);
+
+            for (const el of candidates) {
+                const href = el.getAttribute('href') || '';
+                const text = (el.innerText || el.textContent || '').trim();
+                const download = el.getAttribute('download') || '';
+                const haystack = `${href} ${text} ${download}`.toLowerCase();
+                if (haystack.includes('.svg') || haystack.includes('svg') || haystack.includes('download svg') || haystack.includes('tải svg')) {
+                    return href;
+                }
+            }
+            return '';
+        }
+    """, selector or "")
+
+
+def click_svg_download(page, outcome, temp_path):
+    selector = outcome.get("selector") or ""
+    locators_to_try = []
+    if selector:
+        locators_to_try.append(("selector", page.locator(selector)))
+    locators_to_try.extend([
+        ("text '.svg'", page.get_by_text(".svg", exact=False).last),
+        ("text 'Download SVG'", page.get_by_text("Download SVG", exact=False).last),
+        ("text 'Tải SVG'", page.get_by_text("Tải SVG", exact=False).last),
+        ("text 'Tải SVG bản dịch'", page.get_by_text("Tải SVG bản dịch", exact=False).last)
+    ])
+
+    last_error = None
+    for name, loc in locators_to_try:
+        try:
+            if loc.count() > 0:
+                print(f"  ↳ Tải bằng click: {name}")
+                with page.expect_download(timeout=15000) as download_info:
+                    loc.click(timeout=8000)
+                download = download_info.value
+                download.save_as(temp_path)
+                ensure_downloaded_svg(temp_path)
+                return True
+        except Exception as e:
+            last_error = e
+            print(f"  ↳ Click {name} chưa tải được, thử cách khác")
+
+    raise Exception(f"Click không tải được SVG: {last_error}")
+
+
+def get_download_dirs():
+    dirs = [DOWNLOAD_FOLDER]
+    try:
+        user_downloads = os.path.join(os.environ['USERPROFILE'], 'Downloads')
+        if os.path.exists(user_downloads):
+            dirs.append(user_downloads)
+    except Exception:
+        pass
+    return dirs
+
+
+def get_download_dirs_files():
+    files = {}
+    for d in get_download_dirs():
+        if not os.path.exists(d):
+            continue
+        try:
+            for entry in os.scandir(d):
+                if entry.is_file():
+                    files[entry.path] = entry.stat().st_mtime
+        except Exception:
+            pass
+    return files
+
+
+def find_newly_downloaded_file(before_files):
+    for _ in range(6):
+        current_files = get_download_dirs_files()
+        new_files = []
+        for path, mtime in current_files.items():
+            if path not in before_files:
+                new_files.append((path, mtime))
+            elif mtime > before_files[path]:
+                new_files.append((path, mtime))
+
+        if new_files:
+            new_files.sort(key=lambda x: x[1], reverse=True)
+            for path, _ in new_files:
+                low = path.lower()
+                if low.endswith(".crdownload") or low.endswith(".tmp") or low.endswith(".part"):
+                    sleep(0.5)
+                    continue
+                if low.endswith(".svg"):
+                    return path
+                try:
+                    if os.path.getsize(path) > 100:
+                        with open(path, "r", encoding="utf-8", errors="ignore") as f:
+                            content = f.read(2048)
+                        if "<svg" in content.lower():
+                            return path
+                except Exception:
+                    pass
+        sleep(0.5)
+    return None
+
+
+def get_last_assistant_text(page):
+    try:
+        return page.evaluate("""
+            () => {
+                let nodes = Array.from(
+                    document.querySelectorAll('[data-message-author-role="assistant"]')
+                );
+                if (!nodes.length) {
+                    nodes = Array.from(
+                        document.querySelectorAll('.agent-turn, .markdown, div.result-streaming')
+                    );
+                }
+                if (!nodes.length) return "";
+                const last = nodes[nodes.length - 1];
+                return last.innerText || last.textContent || "";
+            }
+        """)
+    except Exception as e:
+        print(f"⚠ Lỗi get_last_assistant_text: {e}")
+        return ""
+
+
+def extract_json_from_text(text: str) -> dict:
+    import re
+    if not text:
+        raise ValueError("Nội dung text rỗng")
+        
+    # 1. Thử trích xuất từ markdown code blocks (```json ... ``` hoặc ``` ... ```)
+    match = re.search(r"```(?:json)?(.*?)```", text, re.DOTALL | re.IGNORECASE)
+    if match:
+        content = match.group(1).strip()
+        first_brace = content.find("{")
+        last_brace = content.rfind("}")
+        if first_brace != -1 and last_brace != -1 and last_brace >= first_brace:
+            json_str = content[first_brace:last_brace + 1].strip()
+            try:
+                return json.loads(json_str)
+            except Exception as e:
+                raise ValueError(f"Lỗi parse JSON từ code block: {e}")
+                
+    # 2. Tìm cặp ngoặc { ... } bên ngoài cùng trong toàn bộ text
+    first_brace = text.find("{")
+    last_brace = text.rfind("}")
+    if first_brace != -1 and last_brace != -1 and last_brace >= first_brace:
+        json_str = text[first_brace:last_brace + 1].strip()
+        try:
+            return json.loads(json_str)
+        except Exception as e:
+            raise ValueError(f"Lỗi parse JSON từ văn bản: {e}")
+            
+    raise ValueError("Không tìm thấy cấu trúc JSON hợp lệ trong phản hồi")
+
+
+def extract_svg_from_dom(page):
+    try:
+        svg_content = page.evaluate("""
+            () => {
+                const assistantNodes = Array.from(document.querySelectorAll('[data-message-author-role="assistant"]'));
+                for (const node of assistantNodes) {
+                    const svgEl = node.querySelector('svg');
+                    if (svgEl) {
+                        return svgEl.outerHTML;
+                    }
+                }
+
+                const codeBlocks = Array.from(document.querySelectorAll('pre, code, div.markdown'));
+                for (const block of codeBlocks) {
+                    const text = (block.innerText || block.textContent || '').trim();
+                    if (text.includes('<svg') && text.includes('</svg>')) {
+                        const startIdx = text.indexOf('<svg');
+                        const endIdx = text.indexOf('</svg>', startIdx);
+                        if (startIdx !== -1 && endIdx !== -1) {
+                            return text.slice(startIdx, endIdx + 6);
+                        }
+                    }
+                }
+
+                const svgEls = Array.from(document.querySelectorAll('svg'));
+                for (const svgEl of svgEls) {
+                    const prompt = document.querySelector('#prompt-textarea');
+                    const composer = prompt ? (prompt.closest('form') || prompt.parentElement) : null;
+                    if (composer && composer.contains(svgEl)) continue;
+
+                    let cur = svgEl;
+                    let skip = false;
+                    while (cur) {
+                        const tag = cur.tagName.toLowerCase();
+                        const id = (cur.id || '').toLowerCase();
+                        const cls = (cur.getAttribute('class') || '').toLowerCase();
+                        if (tag === 'nav' || tag === 'header' || id.includes('sidebar') || cls.includes('sidebar')) {
+                            skip = true;
+                            break;
+                        }
+                        cur = cur.parentElement;
+                    }
+                    if (!skip) {
+                        const box = svgEl.getBoundingClientRect();
+                        if (box.width > 20 && box.height > 20) {
+                            return svgEl.outerHTML;
+                        }
+                    }
+                }
+                return '';
+            }
+        """)
+        return svg_content
+    except Exception as e:
+        print(f"  ⚠ Lỗi extract_svg_from_dom: {e}")
+        return ""
+
+
+def click_element_without_expect_download(page, outcome):
+    selector = outcome.get("selector") or ""
+    locators_to_try = []
+    if selector:
+        locators_to_try.append(("selector", page.locator(selector)))
+    locators_to_try.extend([
+        ("text '.svg'", page.get_by_text(".svg", exact=False).last),
+        ("text 'Download SVG'", page.get_by_text("Download SVG", exact=False).last),
+        ("text 'Tải SVG'", page.get_by_text("Tải SVG", exact=False).last),
+        ("text 'Tải SVG bản dịch'", page.get_by_text("Tải SVG bản dịch", exact=False).last)
+    ])
+
+    for name, loc in locators_to_try:
+        try:
+            if loc.count() > 0:
+                print(f"  ↳ Thử click không expect_download: {name}")
+                loc.click(timeout=5000)
+                return True
+        except Exception as e:
+            print(f"  ↳ Click {name} (không expect_download) lỗi: {e}")
+    return False
+
+
+def download_svg_output(page, outcome, temp_svg_path):
+    print("→ Tải SVG")
+    temp_path = temp_svg_path
+
+    # 1. Thử fetch href trước nếu có href hợp lệ
+    hrefs = [
+        outcome.get("href") or "",
+        find_svg_href_by_selector_or_text(page, outcome.get("selector") or "")
+    ]
+
+    valid_hrefs = []
+    for h in hrefs:
+        if h and is_fetchable_href(h) and h not in valid_hrefs:
+            valid_hrefs.append(h)
+
+    for href in valid_hrefs:
+        try:
+            print(f"  ↳ Thử fetch SVG từ: {href[:120]}")
+            if fetch_svg_href(page, href, temp_path):
+                return temp_path
+        except Exception as e:
+            print(f"  ↳ Fetch SVG thất bại: {e}")
+            if os.path.exists(temp_path):
+                try:
+                    os.remove(temp_path)
+                except Exception:
+                    pass
+
+    # 2. Click không expect_download và quét file mới
+    print("  ↳ Thử click không expect_download + quét file mới")
+    before_files = get_download_dirs_files()
+    if click_element_without_expect_download(page, outcome):
+        new_file = find_newly_downloaded_file(before_files)
+        if new_file:
+            print(f"  ✓ Phát hiện file tải về mới: {new_file}")
+            try:
+                shutil.copy2(new_file, temp_path)
+                ensure_downloaded_svg(temp_path)
+                return temp_path
+            except Exception as e:
+                print(f"  ↳ Copy file mới tải thất bại: {e}")
+                if os.path.exists(temp_path):
+                    try:
+                        os.remove(temp_path)
+                    except Exception:
+                        pass
+
+    # 3. Click dùng expect_download (Playwright standard)
+    print("  ↳ Thử click dùng expect_download")
+    try:
+        if click_svg_download(page, outcome, temp_path):
+            return temp_path
+    except Exception as e:
+        print(f"  ↳ Click dùng expect_download thất bại: {e}")
+        if os.path.exists(temp_path):
+            try:
+                os.remove(temp_path)
+            except Exception:
+                pass
+
+    # 4. Thử đọc trực tiếp từ DOM
+    print("  ↳ Thử đọc SVG trực tiếp từ DOM")
+    dom_svg = extract_svg_from_dom(page)
+    if dom_svg:
+        try:
+            with open(temp_path, "w", encoding="utf-8", newline="") as f:
+                f.write(dom_svg)
+            ensure_downloaded_svg(temp_path)
+            print("  ✓ Đã lấy SVG thành công trực tiếp từ DOM")
+            return temp_path
+        except Exception as e:
+            print(f"  ↳ Đọc DOM SVG thất bại: {e}")
+            if os.path.exists(temp_path):
+                try:
+                    os.remove(temp_path)
+                except Exception:
+                    pass
+
+    # In thông tin chi tiết khi thất bại hoàn toàn
+    print(f"  ⚠ Chi tiết SVG outcome:")
+    print(f"    - kind: {outcome.get('kind')}")
+    print(f"    - value: {outcome.get('value')}")
+    print(f"    - href: {outcome.get('href')}")
+    print(f"    - selector: {outcome.get('selector')}")
+    print(f"    - text: {outcome.get('text')}")
+    print(f"    - aria-label: {outcome.get('ariaLabel')}")
+    print(f"    - data-testid: {outcome.get('testid')}")
+    print(f"    - role: {outcome.get('role')}")
+    print(f"    - outerHTML: {outcome.get('outerHTML')}")
+
+    raise Exception("Không tải được SVG qua bất kỳ phương pháp nào (fetch, click, quét file, DOM extraction)")
+
+
+def validate_and_process_svg(temp_download_path, target_svg_path):
+    if not os.path.exists(temp_download_path):
+        raise Exception("Không tìm thấy file SVG đã tải")
+
+    size = os.path.getsize(temp_download_path)
+    if size < 100:
+        raise Exception(f"File SVG quá nhỏ ({size} bytes)")
+
+    try:
+        with open(temp_download_path, "r", encoding="utf-8", errors="ignore") as f:
+            content = f.read()
+    except Exception as e:
+        raise Exception(f"Không đọc được nội dung SVG: {e}")
+
+    if "<svg" not in content.lower():
+        # Genuine bad file (not containing svg tag) - rename to bad.svg
+        bad_svg_path = target_svg_path.replace(".svg", ".bad.svg")
+        if os.path.exists(bad_svg_path):
+            try:
+                os.remove(bad_svg_path)
+            except Exception:
+                pass
+        os.rename(temp_download_path, bad_svg_path)
+        raise Exception("Nội dung file không chứa thẻ <svg>.")
+
+    # Valid SVG format content-wise - save to final target path immediately
+    if os.path.exists(target_svg_path):
+        try:
+            os.remove(target_svg_path)
+        except Exception:
+            pass
+    os.rename(temp_download_path, target_svg_path)
+
+    return True
+
+
+def send_svg_instruction(page):
+    if not PROMPT_SVG_INSTRUCTION.strip():
+        return
+    print("→ Gửi SVG instruction nền")
+    before_response = get_assistant_response_signature(page)
+    send_prompt(page, PROMPT_SVG_INSTRUCTION)
+    wait_response_after_send(
+        page,
+        timeout_start=90,
+        timeout_done=900,
+        resend_text=PROMPT_SVG_INSTRUCTION,
+        before_signature=before_response
+    )
+
+
+
+
 
 def process_one(page, all_images, img):
     index = all_images.index(img) + 1
-    save_name = get_output_name(img)
-    save_path = os.path.join(DOWNLOAD_FOLDER, save_name)
+    
+    if OUTPUT_MODE == "image":
+        save_name = get_output_name(img)
+        save_path = os.path.join(DOWNLOAD_FOLDER, save_name)
 
-    print(f"\n--- {index}: {img.name} → {save_name} ---")
+        print(f"\n--- {index}: {img.name} → {save_name} ---")
 
-    reset_chat(page)
-    upload_image(page, img)
-    wait_upload_attached(page, timeout=90)
+        reset_chat(page)
+        send_svg_instruction(page)
+        upload_image(page, img)
+        wait_upload_attached(page, timeout=90)
 
-    if not run_dich_step(page):
-        raise Exception("Bước Dịch quá thời gian chờ sau nhiều lần thử")
+        if not run_dich_step(page):
+            raise Exception("Bước Dịch quá thời gian chờ sau nhiều lần thử")
 
-    sleep(5)
+        sleep(5)
 
-    old_imgs = get_all_image_srcs(page)
+        old_outputs = get_all_outputs(page)
+        old_sigs = {get_outcome_sig(x) for x in old_outputs}
 
-    img_url = try_create_image(page, old_imgs)
+        outcome = try_create_image(page, old_sigs)
 
-    if not img_url:
-        raise Exception("Không tạo được ảnh sau nhiều lần thử")
+        if not outcome:
+            raise Exception("Không tạo được ảnh/tệp sau nhiều lần thử")
 
-    download_image(page, img_url, save_path)
+        if outcome.get("kind") == "raster":
+            download_image(page, outcome["value"], save_path)
+            if os.path.exists(save_path) and os.path.getsize(save_path) > 10000:
+                print("✓ DONE")
+                write_progress(index, img.name, save_name, "done", "OK")
+            else:
+                raise Exception("File tải lỗi hoặc quá nhỏ")
+        elif outcome.get("kind") == "svg_download":
+            svg_name = get_svg_name_from_png(save_name)
+            svg_path = os.path.join(DOWNLOAD_FOLDER, svg_name)
+            bad_svg_path = svg_path.replace(".svg", ".bad.svg")
 
-    if os.path.exists(save_path) and os.path.getsize(save_path) > 10000:
-        print("✓ DONE")
-        write_progress(index, img.name, save_name, "done", "OK")
-    else:
-        raise Exception("File tải lỗi hoặc quá nhỏ")
+            # Restore bad.svg to .svg if it exists from previous run but .svg is missing
+            if os.path.exists(bad_svg_path) and not os.path.exists(svg_path):
+                try:
+                    os.rename(bad_svg_path, svg_path)
+                except Exception:
+                    pass
+
+            temp_download_path = os.path.join(DOWNLOAD_FOLDER, f"{svg_name}.part")
+
+            # Clean up old temp files
+            for path_to_clean in [temp_download_path, temp_download_path + ".part"]:
+                if os.path.exists(path_to_clean):
+                    try:
+                        os.remove(path_to_clean)
+                    except Exception:
+                        pass
+
+            download_svg_output(page, outcome, temp_download_path)
+            validate_and_process_svg(temp_download_path, svg_path)
+
+            if os.path.exists(svg_path) and os.path.getsize(svg_path) > 100:
+                print("✓ DONE (SVG)")
+                write_progress(index, img.name, svg_name, "done", "OK (SVG)")
+            else:
+                raise Exception("File SVG lỗi hoặc quá nhỏ")
+                
+    elif OUTPUT_MODE == "svg_json":
+        print(f"\n--- {index}: {img.name} (SVG JSON Mode) ---")
+        
+        # 1. Reset chat & upload ảnh như cũ
+        reset_chat(page)
+        upload_image(page, img)
+        wait_upload_attached(page, timeout=90)
+        
+        # 2. Gửi prompt "chép lại nguyên văn" và "dịch bản chép lại"
+        print("→ Bắt đầu bước dịch (chép lại + dịch)")
+        if not run_dich_step(page):
+            raise Exception("Bước Dịch quá thời gian chờ sau nhiều lần thử")
+            
+        sleep(5)
+        
+        # 3. Gửi PROMPT_SVG_JSON_LAYOUT
+        print("→ Gửi prompt JSON Layout")
+        before_response = get_assistant_response_signature(page)
+        send_prompt(page, PROMPT_SVG_JSON_LAYOUT)
+        
+        # Chờ assistant trả lời xong
+        print("⏳ Chờ ChatGPT phản hồi JSON Layout...")
+        if not wait_response_after_send(
+            page,
+            timeout_start=90,
+            timeout_done=900,
+            resend_text=PROMPT_SVG_JSON_LAYOUT,
+            before_signature=before_response
+        ):
+            raise Exception("Chờ phản hồi JSON Layout quá thời gian")
+            
+        # Lấy text assistant cuối cùng
+        text = get_last_assistant_text(page)
+        if not text:
+            raise Exception("Không lấy được nội dung phản hồi của assistant")
+            
+        # Extract JSON
+        print("→ Trích xuất JSON từ phản hồi")
+        layout = extract_json_from_text(text)
+        
+        # Đảm bảo thư mục lưu output tồn tại
+        output_dir = BASE_DIR / "output"
+        json_layout_dir = output_dir / "json_layout"
+        svg_dir = output_dir / "svg"
+        failed_dir = output_dir / "failed"
+        
+        os.makedirs(json_layout_dir, exist_ok=True)
+        os.makedirs(svg_dir, exist_ok=True)
+        os.makedirs(failed_dir, exist_ok=True)
+        
+        img_stem = img.stem
+        json_path = json_layout_dir / f"{img_stem}.json"
+        svg_path = svg_dir / f"{img_stem}.svg"
+        
+        # Lưu JSON
+        with open(json_path, "w", encoding="utf-8") as f:
+            json.dump(layout, f, ensure_ascii=False, indent=2)
+        print(f"✓ Đã lưu JSON vào: {json_path}")
+        
+        # Validate layout
+        print("→ Kiểm tra (validate) layout")
+        severe_errors, warning_errors = validate_layout_classified(layout)
+        
+        # Render SVG (chỉ render nếu không có lỗi nghiêm trọng từ validation)
+        render_warnings = []
+        if not severe_errors:
+            print("→ Render SVG")
+            render_warnings = render_svg(layout, str(svg_path))
+            print(f"✓ Đã lưu SVG vào: {svg_path}")
+            
+            # Phân loại warnings từ render_svg
+            for warn in render_warnings:
+                if warn.startswith("[SEVERE]"):
+                    severe_errors.append(warn[len("[SEVERE]"):].strip())
+                else:
+                    clean_warn = warn[len("[WARNING]"):].strip() if warn.startswith("[WARNING]") else warn
+                    warning_errors.append(clean_warn)
+                    
+        # Nếu có lỗi nghiêm trọng (Severe)
+        if severe_errors:
+            print(f"[FAILED] {img.name} thất bại do lỗi nghiêm trọng: {severe_errors}")
+            # Ghi thông tin lỗi và copy ảnh gốc vào output/failed
+            failed_img_path = failed_dir / img.name
+            error_txt_path = failed_dir / f"{img_stem}_error.txt"
+            
+            try:
+                shutil.copy2(img, failed_img_path)
+                with open(error_txt_path, "w", encoding="utf-8") as f:
+                    f.write(f"File: {img.name}\n")
+                    f.write(f"Time: {datetime.now().isoformat()}\n")
+                    f.write("Severe Layout/Rendering Errors:\n")
+                    for err in severe_errors:
+                        f.write(f"- {err}\n")
+                    if warning_errors:
+                        f.write("\nWarnings:\n")
+                        for warn in warning_errors:
+                            f.write(f"- {warn}\n")
+                print(f"✓ Đã copy ảnh gốc và ghi log lỗi vào: {failed_dir}")
+            except Exception as e_failed:
+                print(f"⚠ Lỗi khi lưu log thất bại: {e_failed}")
+                
+            raise Exception(f"Severe errors: {'; '.join(severe_errors)}")
+            
+        # Nếu chỉ có warnings và không có severe errors
+        elif warning_errors:
+            print(f"[WARNING] {img.name} thành công nhưng có cảnh báo: {warning_errors}")
+            
+            # Vẫn xuất PNG preview và PDF từ SVG
+            png_preview_path = output_dir / "png_preview" / f"{img_stem}.png"
+            pdf_path = output_dir / "pdf" / f"{img_stem}.pdf"
+            export_svg_to_formats(svg_path, png_preview_path, pdf_path, EXPORT_PNG_PREVIEW, EXPORT_PDF)
+            
+            # Ghi progress
+            write_progress(index, img.name, f"{img_stem}.svg", "done", f"WARNING: {'; '.join(warning_errors)[:100]}")
+            
+        # Nếu hoàn toàn không có lỗi
+        else:
+            print(f"[OK] {img.name} hoàn thành xuất sắc!")
+            
+            # Xuất PNG preview và PDF từ SVG
+            png_preview_path = output_dir / "png_preview" / f"{img_stem}.png"
+            pdf_path = output_dir / "pdf" / f"{img_stem}.pdf"
+            export_svg_to_formats(svg_path, png_preview_path, pdf_path, EXPORT_PNG_PREVIEW, EXPORT_PDF)
+            
+            # Ghi progress
+            write_progress(index, img.name, f"{img_stem}.svg", "done", "OK (SVG JSON)")
 
 
 def main():
@@ -1317,6 +2183,14 @@ def main():
     print(f"🚀 Mỗi lần xử lý: {BATCH_SIZE} ảnh")
     print(f"📌 Batch lần này: {len(batch)} ảnh")
     print(f"🔁 Chế độ chạy: {RUN_MODE}")
+    print(f"📤 Chế độ đầu ra (OUTPUT_MODE): {OUTPUT_MODE}")
+    print(f"🖼 Xuất PNG Preview (EXPORT_PNG_PREVIEW): {EXPORT_PNG_PREVIEW}")
+    print(f"📄 Xuất PDF (EXPORT_PDF): {EXPORT_PDF}")
+    print(f"📝 Prompt chép lại: {PROMPT_CHEP_LAI}")
+    print(f"📝 Prompt dịch: {PROMPT_DICH}")
+    print(f"📝 Instruction tạo SVG: {PROMPT_SVG_INSTRUCTION}")
+    print(f"📝 Prompt tạo ảnh: {PROMPT_TAO_ANH}")
+    print(f"📝 Prompt JSON Layout: {PROMPT_SVG_JSON_LAYOUT}")
 
     if START_FROM:
         print(f"▶ Bắt đầu từ: {START_FROM}")
@@ -1348,13 +2222,19 @@ def main():
             for img in batch:
                 try:
                     index = images.index(img) + 1
-                    save_name = get_output_name(img)
+                    if OUTPUT_MODE == "svg_json":
+                        save_name = img.stem + ".svg"
+                    else:
+                        save_name = get_output_name(img)
                     process_one(page, images, img)
 
                 except Exception as e:
                     index = getattr(img, '_batch_index', 0) or (images.index(img) + 1 if img in images else 0)
                     try:
-                        save_name = get_output_name(img)
+                        if OUTPUT_MODE == "svg_json":
+                            save_name = img.stem + ".svg"
+                        else:
+                            save_name = get_output_name(img)
                     except Exception:
                         save_name = img.stem + "_VN.png"
                     print(f"✗ Lỗi: {e}")
