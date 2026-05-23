@@ -71,7 +71,10 @@ Schema bắt buộc:
   "blocks": []
 }""",
     "theme": "system",
-    "language": "vi"
+    "language": "vi",
+    "output_mode": "image",
+    "export_png_preview": "True",
+    "export_pdf": "False"
 }
 
 LANGUAGE_OPTIONS = {
@@ -156,7 +159,11 @@ TEXT = {
         "exported_failed": "Đã xuất {count} dòng lỗi.",
         "copy_retry_log": "=== Copy lỗi retry ===\nĐã copy: {count}\nThư mục: {path}",
         "missing_count": "Không tìm thấy: {count} file",
-        "copied_failed": "Đã copy {count} ảnh lỗi sang:\n{path}"
+        "copied_failed": "Đã copy {count} ảnh lỗi sang:\n{path}",
+        "output_mode": "Chế độ đầu ra",
+        "export_png_preview": "Xuất ảnh PNG preview (SVG JSON Mode)",
+        "export_pdf": "Xuất file PDF (SVG JSON Mode)",
+        "prompt_svg_json_layout": "4. Prompt JSON Bố cục"
     },
     "en": {
         "language": "Language",
@@ -221,7 +228,11 @@ TEXT = {
         "exported_failed": "Exported {count} failed rows.",
         "copy_retry_log": "=== Copy failures for retry ===\nCopied: {count}\nFolder: {path}",
         "missing_count": "Missing: {count} files",
-        "copied_failed": "Copied {count} failed images to:\n{path}"
+        "copied_failed": "Copied {count} failed images to:\n{path}",
+        "output_mode": "Output Mode",
+        "export_png_preview": "Export PNG preview (SVG JSON Mode)",
+        "export_pdf": "Export PDF (SVG JSON Mode)",
+        "prompt_svg_json_layout": "4. JSON Layout prompt"
     }
 }
 
@@ -658,6 +669,9 @@ class ChatGPTBatchApp:
             "profile_dir": self.profile_var.get(),
             "batch_size": self.batch_var.get(),
             "start_from": self.start_from_var.get(),
+            "output_mode": self.output_mode_var.get(),
+            "export_png_preview": "True" if self.export_png_var.get() else "False",
+            "export_pdf": "True" if self.export_pdf_var.get() else "False",
             "prompt_chep_lai": prompt_chep_lai,
             "prompt_dich": prompt_dich,
             "prompt_svg_instruction": prompt_svg_instruction,
@@ -830,6 +844,9 @@ class ChatGPTBatchApp:
         self.profile_var = tk.StringVar(value=self.settings["profile_dir"])
         self.batch_var = tk.StringVar(value=self.settings["batch_size"])
         self.start_from_var = tk.StringVar(value=self.settings.get("start_from", ""))
+        self.output_mode_var = tk.StringVar(value=self.settings.get("output_mode", "image"))
+        self.export_png_var = tk.BooleanVar(value=str(self.settings.get("export_png_preview", "True")).lower() == "true")
+        self.export_pdf_var = tk.BooleanVar(value=str(self.settings.get("export_pdf", "False")).lower() == "true")
 
         config_card = ttk.Frame(main, style="Card.TFrame", padding=(14, 10))
         config_card.pack(fill="x", pady=(0, 8))
@@ -862,6 +879,37 @@ class ChatGPTBatchApp:
             text=self.t("start_hint"),
             style="SectionHint.TLabel"
         ).grid(row=7, column=1, sticky="w", pady=(0, 3))
+
+        ttk.Label(config_card, text=self.t("output_mode"), style="Field.TLabel").grid(
+            row=8, column=0, sticky="w", padx=(0, 12), pady=3
+        )
+        output_mode_combo = ttk.Combobox(
+            config_card,
+            textvariable=self.output_mode_var,
+            values=["image", "svg_json"],
+            state="readonly",
+            width=22
+        )
+        output_mode_combo.grid(row=8, column=1, sticky="w", pady=3)
+
+        checkbox_frame = ttk.Frame(config_card, style="Card.TFrame")
+        checkbox_frame.grid(row=9, column=1, sticky="w", pady=5)
+        
+        self.style.configure("TCheckbutton", background=c["card_bg"], foreground=c["text"], font=("Segoe UI", 10))
+        
+        ttk.Checkbutton(
+            checkbox_frame,
+            text=self.t("export_png_preview"),
+            variable=self.export_png_var,
+            style="TCheckbutton"
+        ).pack(side="left", padx=(0, 15))
+        
+        ttk.Checkbutton(
+            checkbox_frame,
+            text=self.t("export_pdf"),
+            variable=self.export_pdf_var,
+            style="TCheckbutton"
+        ).pack(side="left")
 
         config_card.columnconfigure(1, weight=1)
 
@@ -900,6 +948,12 @@ class ChatGPTBatchApp:
             self.t("prompt_tao_anh"),
             self.settings.get("prompt_tao_anh", DEFAULT_SETTINGS["prompt_tao_anh"]),
             5
+        )
+        self.prompt_svg_json_layout_text = self.add_prompt_row(
+            prompt_card,
+            self.t("prompt_svg_json_layout"),
+            self.settings.get("prompt_svg_json_layout", DEFAULT_SETTINGS["prompt_svg_json_layout"]),
+            6
         )
 
         prompt_card.columnconfigure(1, weight=1)
@@ -1138,10 +1192,14 @@ class ChatGPTBatchApp:
         env["BATCH_SIZE"] = self.batch_var.get()
         env["START_FROM"] = self.start_from_var.get()
         env["RUN_MODE"] = mode
+        env["OUTPUT_MODE"] = self.settings.get("output_mode", "image")
+        env["EXPORT_PNG_PREVIEW"] = str(self.settings.get("export_png_preview", "True"))
+        env["EXPORT_PDF"] = str(self.settings.get("export_pdf", "False"))
         env["PROMPT_CHEP_LAI"] = self.get_text_value("prompt_chep_lai_text", "prompt_chep_lai")
         env["PROMPT_DICH"] = self.get_text_value("prompt_dich_text", "prompt_dich")
         env["PROMPT_SVG_INSTRUCTION"] = self.get_text_value("prompt_svg_instruction_text", "prompt_svg_instruction")
         env["PROMPT_TAO_ANH"] = self.get_text_value("prompt_tao_anh_text", "prompt_tao_anh")
+        env["PROMPT_SVG_JSON_LAYOUT"] = self.get_text_value("prompt_svg_json_layout_text", "prompt_svg_json_layout")
         env["PYTHONIOENCODING"] = "utf-8"
         env["PYTHONUTF8"] = "1"
         env["PYTHONUNBUFFERED"] = "1"

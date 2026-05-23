@@ -109,7 +109,8 @@ def render_text_block(block: dict, warnings: list) -> str:
 def render_table(block: dict, warnings: list) -> str:
     """
     Renders table using <rect> for cell borders/backgrounds and <text> for values.
-    Supports left and right alignment (text-anchor="end" for currency/amounts).
+    Supports left, center, and right alignment (text-anchor="end" for currency/amounts).
+    Supports multi-line wrapping and vertical centering.
     """
     x = block.get("x", 0)
     y = block.get("y", 0)
@@ -150,23 +151,39 @@ def render_table(block: dict, warnings: list) -> str:
                 f'  <rect x="{current_x}" y="{current_y}" width="{col_width}" height="{row_height}" fill="{cell_fill}" stroke="#000000" stroke-width="2" />'
             )
             
-            # Fit single line text width inside cell
-            cell_font_size = font_size
             padding = 15
             max_text_w = col_width - padding * 2
             
-            font = load_font(None, cell_font_size)
-            text_w = get_text_width(cell_text, font)
+            # Fit text (wrapping and shrinking) inside table cell
+            cell_font_size = font_size
+            best_lines = []
+            best_font_size = cell_font_size
             
-            while text_w > max_text_w and cell_font_size > min_cell_font_size:
-                cell_font_size -= 1
+            while cell_font_size >= min_cell_font_size:
                 font = load_font(None, cell_font_size)
-                text_w = get_text_width(cell_text, font)
+                lines = wrap_text(cell_text, max_text_w, font)
+                line_height = cell_font_size * 1.2
+                total_text_height = len(lines) * line_height
                 
-            if text_w > max_text_w:
-                warnings.append(f"[SEVERE] Table block '{block.get('id', 'unknown')}' cell '{cell_text}' overflows column width {col_width} at min_font_size={min_cell_font_size}")
-            elif cell_font_size < font_size:
-                warnings.append(f"[WARNING] Table cell '{cell_text}' font size reduced from {font_size} to {cell_font_size} to fit column width")
+                if total_text_height <= row_height - 6:
+                    best_lines = lines
+                    best_font_size = cell_font_size
+                    break
+                cell_font_size -= 1
+            else:
+                # If it exceeds even at min_cell_font_size
+                cell_font_size = min_cell_font_size
+                font = load_font(None, cell_font_size)
+                best_lines = wrap_text(cell_text, max_text_w, font)
+                best_font_size = cell_font_size
+                
+                line_height = cell_font_size * 1.2
+                total_text_height = len(best_lines) * line_height
+                if total_text_height > row_height:
+                    warnings.append(f"[SEVERE] Table block '{block.get('id', 'unknown')}' cell '{cell_text}' overflows row height {row_height} at min_font_size={min_cell_font_size}")
+            
+            if best_font_size < font_size:
+                warnings.append(f"[WARNING] Table cell '{cell_text}' font size reduced from {font_size} to {best_font_size} to fit cell height/width")
             
             # Horizontal cell alignment
             if align == "center":
@@ -179,12 +196,22 @@ def render_table(block: dict, warnings: list) -> str:
                 text_anchor = "start"
                 text_x = current_x + padding
                 
-            # Vertical center adjustment
-            text_y = current_y + row_height / 2 + cell_font_size * 0.35
+            # Vertical center adjustment for multiple lines
+            line_height = best_font_size * 1.2
+            total_text_height = len(best_lines) * line_height
+            start_y = current_y + (row_height - total_text_height) / 2 + best_font_size * 0.85
             
-            escaped_text = escape_xml(cell_text)
+            tspans = []
+            for i, line in enumerate(best_lines):
+                escaped_line = escape_xml(line)
+                if i == 0:
+                    tspans.append(f'<tspan x="{text_x}" y="{start_y}">{escaped_line}</tspan>')
+                else:
+                    tspans.append(f'<tspan x="{text_x}" dy="{line_height}">{escaped_line}</tspan>')
+            tspan_str = "\n  ".join(tspans)
+            
             svg_elements.append(
-                f'  <text x="{text_x}" y="{text_y}" font-family="{font_family}" font-size="{cell_font_size}" font-weight="{font_weight}" text-anchor="{text_anchor}" fill="#000000">{escaped_text}</text>'
+                f'  <text font-family="{font_family}" font-size="{best_font_size}" font-weight="{font_weight}" text-anchor="{text_anchor}" fill="#000000">\n    {tspan_str}\n  </text>'
             )
             
             current_x += col_width
@@ -256,12 +283,14 @@ def render_svg(layout: dict, output_path: str) -> list[str]:
     # Render layout blocks
     for block in blocks:
         block_type = block.get("type", "").lower()
-        if block_type in ("title", "paragraph", "text"):
+        if block_type in ("title", "paragraph", "text", "caption", "formula"):
             svg_content.append(render_text_block(block, warnings))
         elif block_type == "table":
             svg_content.append(render_table(block, warnings))
         elif block_type == "arrow":
             svg_content.append(render_arrow(block))
+        else:
+            warnings.append(f"[WARNING] {block_type.capitalize()} block '{block.get('id', 'unknown')}' is not rendered yet")
             
     svg_content.append('</svg>')
     
