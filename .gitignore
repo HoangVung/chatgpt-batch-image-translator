@@ -3,7 +3,8 @@ __pycache__/
 *.pyo
 *.pyd
 
-chatgpt_auto_profile/
+chatgpt_auto_profile*/
+gemini_auto_profile*/
 .tmp.drivedownload/
 .tmp.driveupload/
 
@@ -23,3 +24,4 @@ dist_rebuild/
 *.spec
 
 app_settings.json
+output/
