@@ -5,12 +5,9 @@ import csv
 import json
 import base64
 import functools
-import shutil
 from pathlib import Path
 from datetime import datetime
 from playwright.sync_api import sync_playwright
-from layout_validator import validate_layout_classified
-from svg_renderer import render_svg, export_svg_to_formats
 
 try:
     import pygetwindow as gw
@@ -36,60 +33,8 @@ DEFAULT_CONFIG = {
     "download_folder": str(BASE_DIR / "images_vn"),
     "profile_dir": str(BASE_DIR / "chatgpt_auto_profile"),
     "batch_size": "5",
-    "start_from": "",
-    "prompt_chep_lai": "chép lại nguyên văn",
-    "prompt_dich": "dịch bản chép lại",
-    "prompt_tao_anh": "tạo ảnh với bản dịch",
-    "prompt_svg_instruction": "Trong cuộc chat này, khi tôi yêu cầu tạo ảnh/SVG với bản dịch: hãy tạo file SVG theo bố cục ảnh gốc, tự kiểm tra và sửa chữ chồng chữ/tràn khung trước khi gửi, câu dài phải xuống dòng và giữ giãn dòng hợp lý. Chỉ gửi link tải SVG cuối cùng.",
-    "prompt_svg_json_layout": """Dựa trên ảnh gốc và bản dịch tiếng Việt ở trên, hãy xuất JSON_LAYOUT để app local dựng SVG.
-
-Yêu cầu bắt buộc:
-- Không tạo ảnh.
-- Không viết SVG.
-- Chỉ xuất một khối JSON hợp lệ, không giải thích thêm.
-- Giữ đủ 100% nội dung bản dịch.
-- Không bỏ tiêu đề, đoạn văn, bảng, số liệu, mũi tên, chú thích.
-- Chia trang thành các block: title, paragraph, table, arrow, figure, caption, formula.
-- Mỗi block phải có x, y, width, height theo hệ tọa độ trang.
-- Page size mặc định: width = 2480, height = 3508.
-- Với paragraph: chia sẵn thành nhiều dòng ngắn, mỗi dòng không quá 42 ký tự tiếng Việt.
-- Với table: xuất rõ số dòng, số cột, nội dung từng ô, căn trái/phải/giữa.
-- Với số tiền: giữ nguyên định dạng số, dấu phẩy, dấu ngoặc, và căn phải.
-- Với mũi tên: xuất x1, y1, x2, y2, direction, label nếu có.
-- Với công thức: giữ nguyên ký hiệu toán học/kế toán.
-- Không dùng foreignObject.
-- Nếu không chắc tọa độ tuyệt đối, hãy ước lượng theo tỷ lệ gần nhất với ảnh gốc.
-
-Schema bắt buộc:
-{
-  "page": {
-    "width": 2480,
-    "height": 3508,
-    "background": "#ffffff"
-  },
-  "meta": {
-    "sourceFile": "",
-    "language": "vi",
-    "layoutType": "accounting_page"
-  },
-  "blocks": []
-}""",
-    "output_mode": "image",
-    "export_png_preview": "True",
-    "export_pdf": "False"
+    "start_from": ""
 }
-
-
-def prompt_value(env_key, cfg, cfg_key):
-    value = os.getenv(env_key, "").strip()
-    if value:
-        return value
-
-    value = str(cfg.get(cfg_key, "")).strip()
-    if value:
-        return value
-
-    return DEFAULT_CONFIG[cfg_key]
 
 
 def load_config():
@@ -104,19 +49,17 @@ def load_config():
 
     cfg["image_folder"] = os.getenv("IMAGE_FOLDER", cfg["image_folder"])
     cfg["download_folder"] = os.getenv("DOWNLOAD_FOLDER", cfg["download_folder"])
-    cfg["profile_dir"] = os.getenv("PROFILE_DIR", cfg["profile_dir"])
+    cfg["profile_dir"] = os.getenv("PROFILE_DIR", cfg.get("profile_dir", "")).strip()
     cfg["batch_size"] = int(os.getenv("BATCH_SIZE", cfg.get("batch_size", "5")))
     cfg["run_mode"] = os.getenv("RUN_MODE", "main")
     cfg["start_from"] = os.getenv("START_FROM", cfg.get("start_from", "")).strip()
-    cfg["prompt_chep_lai"] = prompt_value("PROMPT_CHEP_LAI", cfg, "prompt_chep_lai")
-    cfg["prompt_dich"] = prompt_value("PROMPT_DICH", cfg, "prompt_dich")
-    cfg["prompt_svg_instruction"] = prompt_value("PROMPT_SVG_INSTRUCTION", cfg, "prompt_svg_instruction")
-    cfg["prompt_tao_anh"] = prompt_value("PROMPT_TAO_ANH", cfg, "prompt_tao_anh")
-    cfg["prompt_svg_json_layout"] = prompt_value("PROMPT_SVG_JSON_LAYOUT", cfg, "prompt_svg_json_layout")
-    cfg["output_mode"] = os.getenv("OUTPUT_MODE", cfg.get("output_mode", "image")).strip().lower()
+    cfg["service"] = os.getenv("SERVICE", cfg.get("service", "chatgpt")).strip().lower()
 
-    cfg["export_png_preview"] = os.getenv("EXPORT_PNG_PREVIEW", str(cfg.get("export_png_preview", "True"))).strip().lower() == "true"
-    cfg["export_pdf"] = os.getenv("EXPORT_PDF", str(cfg.get("export_pdf", "False"))).strip().lower() == "true"
+    if not cfg["profile_dir"]:
+        if cfg["service"] == "gemini":
+            cfg["profile_dir"] = str(BASE_DIR / "gemini_auto_profile")
+        else:
+            cfg["profile_dir"] = str(BASE_DIR / "chatgpt_auto_profile")
 
     return cfg
 
@@ -129,13 +72,7 @@ PROFILE_DIR = CFG["profile_dir"]
 BATCH_SIZE = CFG["batch_size"]
 RUN_MODE = CFG["run_mode"]
 START_FROM = CFG["start_from"]
-
-# OUTPUT_MODE:
-# - "image": chạy như cũ, ChatGPT tạo ảnh và app tải ảnh.
-# - "svg_json": AI xuất JSON_LAYOUT, app local dựng SVG.
-OUTPUT_MODE = CFG.get("output_mode", "image")
-EXPORT_PNG_PREVIEW = CFG.get("export_png_preview", True)
-EXPORT_PDF = CFG.get("export_pdf", False)
+SERVICE = CFG.get("service", "chatgpt")
 
 WAIT_AFTER_EACH_IMAGE = 30
 MAX_RETRY_IMAGE = 3
@@ -143,13 +80,9 @@ MAX_RETRY_DICH = 3
 IMAGE_WAIT_TIMEOUT = 1800
 SEND_VERIFY_TIMEOUT = 45
 
-PROMPT_CHEP_LAI = CFG["prompt_chep_lai"]
-PROMPT_DICH = CFG["prompt_dich"]
-PROMPT_SVG_INSTRUCTION = CFG["prompt_svg_instruction"]
-PROMPT_TAO_ANH = CFG["prompt_tao_anh"]
-PROMPT_SVG_JSON_LAYOUT = CFG["prompt_svg_json_layout"]
-if not PROMPT_SVG_INSTRUCTION.strip() and PROMPT_TAO_ANH.lower().strip() in ["tạo ảnh với bản dịch", "tạo ảnh với bản dịch."]:
-    PROMPT_TAO_ANH = "Tạo file SVG với bản dịch theo bố cục ảnh gốc"
+PROMPT_CHEP_LAI = "chép lại nguyên văn"
+PROMPT_DICH = "dịch bản chép lại"
+PROMPT_TAO_ANH = "Tạo ảnh với bản dịch"
 
 IMAGE_EXTS = [".png", ".jpg", ".jpeg", ".webp"]
 PROGRESS_FILE = os.path.join(DOWNLOAD_FOLDER, "progress.csv")
@@ -159,26 +92,10 @@ def sleep(s):
     time.sleep(s)
 
 
-def ensure_output_dirs():
-    output_dir = BASE_DIR / "output"
-    subdirs = [
-        "images_vn",
-        "json_layout",
-        "svg",
-        "png_preview",
-        "pdf",
-        "logs",
-        "failed"
-    ]
-    for sd in subdirs:
-        os.makedirs(output_dir / sd, exist_ok=True)
-
-
 def ensure_dirs():
     os.makedirs(IMAGE_FOLDER, exist_ok=True)
     os.makedirs(DOWNLOAD_FOLDER, exist_ok=True)
     os.makedirs(PROFILE_DIR, exist_ok=True)
-    ensure_output_dirs()
 
 
 def init_progress():
@@ -307,32 +224,12 @@ def write_progress(index, file_name, output_name, status, note=""):
         ])
 
 
-def get_svg_name_from_png(png_name):
-    if png_name.endswith(".png"):
-        return png_name[:-4] + ".svg"
-    return png_name + ".svg"
-
-
 def output_file_exists(img):
     try:
-        if OUTPUT_MODE == "svg_json":
-            svg_path = os.path.join(BASE_DIR, "output", "svg", f"{img.stem}.svg")
-            if os.path.exists(svg_path) and os.path.getsize(svg_path) > 100:
-                return True
-            return False
-
         output_name = get_output_name(img)
         output_path = os.path.join(DOWNLOAD_FOLDER, output_name)
 
-        if os.path.exists(output_path) and os.path.getsize(output_path) > 10000:
-            return True
-
-        svg_name = get_svg_name_from_png(output_name)
-        svg_path = os.path.join(DOWNLOAD_FOLDER, svg_name)
-        if os.path.exists(svg_path) and os.path.getsize(svg_path) > 100:
-            return True
-
-        return False
+        return os.path.exists(output_path) and os.path.getsize(output_path) > 10000
     except Exception:
         return False
 
@@ -424,6 +321,19 @@ def wait_if_cloudflare(page):
         raise Exception("Vẫn còn Cloudflare sau khi xác minh.")
 
 
+def get_prompt_locator(page):
+    if page.locator("#prompt-textarea").count() > 0:
+        return page.locator("#prompt-textarea")
+    elif page.locator('.ql-editor[contenteditable="true"]').count() > 0:
+        return page.locator('.ql-editor[contenteditable="true"]').first
+    elif page.locator('rich-textarea div[contenteditable="true"]').count() > 0:
+        return page.locator('rich-textarea div[contenteditable="true"]').first
+    elif page.locator('div[contenteditable="true"]').count() > 0:
+        return page.locator('div[contenteditable="true"]').first
+    else:
+        return page.locator("#prompt-textarea")
+
+
 def wait_page_ready(page, timeout=120):
     start = time.time()
 
@@ -440,7 +350,13 @@ def wait_page_ready(page, timeout=120):
             or "Message ChatGPT" in text
             or "Hỏi bất kỳ điều gì" in text
             or "Hôm nay bạn có ý tưởng gì" in text
+            or "Enter a prompt" in text
+            or "Nhập câu lệnh" in text
+            or "Trò chuyện để cùng lên ý tưởng" in text
             or page.locator("#prompt-textarea").count() > 0
+            or page.locator('.ql-editor[contenteditable="true"]').count() > 0
+            or page.locator('rich-textarea').count() > 0
+            or page.locator('div[contenteditable="true"]').count() > 0
         ):
             return True
 
@@ -449,16 +365,28 @@ def wait_page_ready(page, timeout=120):
     return False
 
 
-def login_if_needed(page):
-    page.goto("https://chatgpt.com/", wait_until="domcontentloaded")
+def login_if_needed(page, service=SERVICE):
+    url = "https://gemini.google.com/app" if service == "gemini" else "https://chatgpt.com/"
+    page.goto(url, wait_until="domcontentloaded")
     wait_if_cloudflare(page)
 
-    if wait_page_ready(page, 90) and page.locator("text=Log in").count() == 0:
-        print("✅ Đã vào được ChatGPT.")
+    has_signin = False
+    try:
+        if service == "gemini":
+            signin_text = page.locator("text=Sign in, text=Đăng nhập, text=Get started, text=Bắt đầu, .sign-in-button").count()
+        else:
+            signin_text = page.locator("text=Log in").count()
+        if signin_text > 0:
+            has_signin = True
+    except Exception:
+        pass
+
+    if wait_page_ready(page, 90) and not has_signin:
+        print(f"✅ Đã vào được {service.upper()}.")
         return
 
     print("\nMANUAL_ACTION_REQUIRED")
-    print("⚠️ Chưa đăng nhập.")
+    print(f"⚠️ Chưa đăng nhập {service.upper()}.")
     print("👉 Login thủ công trong cửa sổ trình duyệt.")
     print("👉 Khi thấy ô chat, quay lại app bấm 'Tiếp tục sau can thiệp'.")
     input("Chờ app gửi ENTER sau khi login xong... ")
@@ -466,17 +394,21 @@ def login_if_needed(page):
     wait_if_cloudflare(page)
 
 
-def reset_chat(page):
+def reset_chat(page, service=SERVICE):
     print("→ Reset New chat")
 
-    page.goto("https://chatgpt.com/", wait_until="domcontentloaded")
+    url = "https://gemini.google.com/app" if service == "gemini" else "https://chatgpt.com/"
+    page.goto(url, wait_until="domcontentloaded")
     wait_if_cloudflare(page)
 
     if not wait_page_ready(page, 120):
-        raise Exception("ChatGPT chưa sẵn sàng.")
+        raise Exception(f"{service.upper()} chưa sẵn sàng.")
 
     try:
-        page.locator("text=New chat").first.click(timeout=4000)
+        if service == "gemini":
+            page.locator('button[aria-label*="New chat" i], button[aria-label*="Trò chuyện mới" i], a[aria-label*="New chat" i], a[aria-label*="Trò chuyện mới" i]').first.click(timeout=4000)
+        else:
+            page.locator("text=New chat").first.click(timeout=4000)
     except Exception:
         pass
 
@@ -484,28 +416,103 @@ def reset_chat(page):
     wait_if_cloudflare(page)
 
 
-def upload_image(page, img):
-    try:
-        page.locator("#upload-files").set_input_files(str(img), timeout=8000)
-        print("✓ Upload bằng #upload-files")
-        sleep(6)
-        return
-    except Exception:
-        pass
-
-    file_inputs = page.locator('input[type="file"]')
-    count = file_inputs.count()
-
-    for i in range(count):
+def upload_image(page, img, service=SERVICE):
+    if service == "gemini":
         try:
-            file_inputs.nth(i).set_input_files(str(img), timeout=8000)
-            print(f"✓ Upload bằng input thứ {i}")
+            input_el = page.locator('input[type="file"]').first
+            if input_el.count() > 0:
+                input_el.set_input_files(str(img), timeout=5000)
+                print("✓ Upload bằng input[type=file] trực tiếp")
+                sleep(6)
+                return
+        except Exception:
+            pass
+
+        plus_selectors = [
+            'button[aria-label*="Nội dung tải lên" i]',
+            'button[aria-label*="Uploads" i]',
+            'button[aria-label*="Add files" i]',
+            'button[aria-label*="Thêm" i]',
+            'button:has(svg)'
+        ]
+
+        plus_clicked = False
+        for sel in plus_selectors:
+            try:
+                btn = page.locator(sel).first
+                if btn.count() > 0 and btn.is_visible():
+                    btn.click(timeout=3000, force=True)
+                    plus_clicked = True
+                    sleep(2)
+                    break
+            except Exception:
+                continue
+
+        if not plus_clicked:
+            raise Exception("Không tìm thấy nút Plus (+) để mở menu tải lên của Gemini")
+
+        sub_selectors = [
+            'button:has-text("Lựa chọn tải lên khác")',
+            'button:has-text("Other upload options")',
+            'button[aria-label*="tải lên khác" i]',
+            'button[aria-label*="upload options" i]'
+        ]
+        for sel in sub_selectors:
+            try:
+                btn = page.locator(sel).first
+                if btn.count() > 0 and btn.is_visible():
+                    btn.click(timeout=3000, force=True)
+                    sleep(2)
+                    break
+            except Exception:
+                continue
+
+        upload_btn_selectors = [
+            'button[aria-label*="Tải tệp lên" i]',
+            'button:has-text("Tải tệp lên")',
+            'button[aria-label*="Upload file" i]',
+            'button:has-text("Upload file")',
+            'button:has-text("Upload files")',
+            'button[aria-label*="Attach file" i]'
+        ]
+
+        for sel in upload_btn_selectors:
+            try:
+                btn = page.locator(sel).first
+                if btn.count() > 0 and btn.is_visible():
+                    with page.expect_file_chooser(timeout=8000) as fc_info:
+                        btn.click(timeout=3000, force=True)
+                    file_chooser = fc_info.value
+                    file_chooser.set_files(str(img))
+                    print(f"✓ Upload thành công qua {sel}")
+                    sleep(6)
+                    return
+            except Exception:
+                continue
+
+        raise Exception("Không tìm thấy nút 'Tải tệp lên' để gửi ảnh lên Gemini")
+    else:
+        try:
+            page.locator("#upload-files").set_input_files(str(img), timeout=8000)
+            print("✓ Upload bằng #upload-files")
             sleep(6)
             return
         except Exception:
-            continue
+            pass
 
-    raise Exception("Không upload được ảnh")
+        file_inputs = page.locator('input[type="file"]')
+        count = file_inputs.count()
+
+        for i in range(count):
+            try:
+                file_inputs.nth(i).set_input_files(str(img), timeout=8000)
+                print(f"✓ Upload bằng input thứ {i}")
+                sleep(6)
+                return
+            except Exception:
+                continue
+
+        raise Exception("Không upload được ảnh")
 
 
 def wait_upload_attached(page, timeout=90):
@@ -521,10 +528,13 @@ def wait_upload_attached(page, timeout=90):
         try:
             ok = page.evaluate("""
                 () => {
-                    const prompt = document.querySelector('#prompt-textarea');
+                    const prompt = document.querySelector('#prompt-textarea') || 
+                                   document.querySelector('.ql-editor[contenteditable="true"]') ||
+                                   document.querySelector('rich-textarea div[contenteditable="true"]') ||
+                                   document.querySelector('div[contenteditable="true"]');
                     if (!prompt) return false;
 
-                    let root = prompt.closest('form');
+                    let root = prompt.closest('form') || prompt.closest('.input-area-container') || prompt.parentElement;
                     if (!root) {
                         root = prompt;
                         for (let i = 0; i < 6 && root.parentElement; i++) {
@@ -566,12 +576,19 @@ def wait_prompt_ready(page, timeout=120):
         try:
             ready = page.evaluate("""
                 () => {
-                    const el = document.querySelector('#prompt-textarea');
+                    const el = document.querySelector('#prompt-textarea') || 
+                               document.querySelector('.ql-editor[contenteditable="true"]') ||
+                               document.querySelector('rich-textarea div[contenteditable="true"]') ||
+                               document.querySelector('div[contenteditable="true"]');
                     if (!el) return false;
 
                     const rect = el.getBoundingClientRect();
                     const style = window.getComputedStyle(el);
-                    const stopBtn = document.querySelector('button[data-testid="stop-button"]');
+                    const stopBtn = document.querySelector('button[data-testid="stop-button"]') ||
+                                    document.querySelector('button[aria-label*="Stop" i]') ||
+                                    document.querySelector('button[aria-label*="Cancel" i]') ||
+                                    document.querySelector('button[aria-label*="Dừng" i]') ||
+                                    document.querySelector('button[aria-label*="Hủy" i]');
 
                     const disabled =
                         el.getAttribute('aria-disabled') === 'true' ||
@@ -601,7 +618,6 @@ def wait_prompt_ready(page, timeout=120):
 
 
 def safe_click_prompt(page, timeout=60):
-    box = page.locator("#prompt-textarea")
     last_error = None
     start = time.time()
 
@@ -612,6 +628,8 @@ def safe_click_prompt(page, timeout=60):
             page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
         except Exception:
             pass
+
+        box = get_prompt_locator(page)
 
         try:
             box.click(timeout=5000)
@@ -630,7 +648,10 @@ def safe_click_prompt(page, timeout=60):
         try:
             ok = page.evaluate("""
                 () => {
-                    const el = document.querySelector('#prompt-textarea');
+                    const el = document.querySelector('#prompt-textarea') || 
+                               document.querySelector('.ql-editor[contenteditable="true"]') ||
+                               document.querySelector('rich-textarea div[contenteditable="true"]') ||
+                               document.querySelector('div[contenteditable="true"]');
                     if (!el) return false;
 
                     el.scrollIntoView({block: 'center'});
@@ -649,11 +670,11 @@ def safe_click_prompt(page, timeout=60):
 
         sleep(2)
 
-    raise Exception(f"Không click/focus được prompt-textarea: {last_error}")
+    raise Exception(f"Không click/focus được prompt box: {last_error}")
 
 
 def clear_prompt_box(page):
-    box = page.locator("#prompt-textarea")
+    box = get_prompt_locator(page)
 
     try:
         box.click(timeout=5000, force=True)
@@ -667,7 +688,10 @@ def clear_prompt_box(page):
     try:
         page.evaluate("""
             () => {
-                const el = document.querySelector('#prompt-textarea');
+                const el = document.querySelector('#prompt-textarea') || 
+                           document.querySelector('.ql-editor[contenteditable="true"]') ||
+                           document.querySelector('rich-textarea div[contenteditable="true"]') ||
+                           document.querySelector('div[contenteditable="true"]');
                 if (!el) return;
 
                 el.focus();
@@ -686,7 +710,7 @@ def clear_prompt_box(page):
 
 
 def fill_prompt_box(page, text):
-    box = page.locator("#prompt-textarea")
+    box = get_prompt_locator(page)
 
     try:
         box.fill(text, timeout=8000)
@@ -698,8 +722,11 @@ def fill_prompt_box(page, text):
     try:
         page.evaluate("""
             (value) => {
-                const el = document.querySelector('#prompt-textarea');
-                if (!el) throw new Error('Không thấy prompt-textarea');
+                const el = document.querySelector('#prompt-textarea') || 
+                           document.querySelector('.ql-editor[contenteditable="true"]') ||
+                           document.querySelector('rich-textarea div[contenteditable="true"]') ||
+                           document.querySelector('div[contenteditable="true"]');
+                if (!el) throw new Error('Không thấy prompt box');
 
                 el.focus();
                 el.innerHTML = '';
@@ -728,7 +755,10 @@ def get_prompt_text(page):
     try:
         return page.evaluate("""
             () => {
-                const el = document.querySelector('#prompt-textarea');
+                const el = document.querySelector('#prompt-textarea') || 
+                           document.querySelector('.ql-editor[contenteditable="true"]') ||
+                           document.querySelector('rich-textarea div[contenteditable="true"]') ||
+                           document.querySelector('div[contenteditable="true"]');
                 if (!el) return '';
                 return (el.innerText || el.textContent || '').trim();
             }
@@ -739,15 +769,15 @@ def get_prompt_text(page):
 
 def is_generating(page):
     """
-    Nhận diện ChatGPT đang xử lý.
-
-    Lưu ý: với tạo ảnh, ChatGPT có lúc mất nút stop hoặc không hiện chữ generating
-    trong vài chục giây, nên hàm này chỉ dùng như một tín hiệu phụ.
-    Không được dùng riêng hàm này để kết luận tạo ảnh đã fail.
+    Nhận diện ChatGPT hoặc Gemini đang xử lý.
     """
     try:
-        if page.locator('button[data-testid="stop-button"]').count() > 0:
-            return True
+        stop_buttons = page.locator('button[data-testid="stop-button"], button[aria-label*="Stop" i], button[aria-label*="Cancel" i], button[aria-label*="Dừng" i], button[aria-label*="Hủy" i]')
+        if stop_buttons.count() > 0:
+            for i in range(stop_buttons.count()):
+                btn = stop_buttons.nth(i)
+                if btn.is_visible():
+                    return True
     except Exception:
         pass
 
@@ -768,7 +798,10 @@ def is_generating(page):
                         label.includes('stop generating') ||
                         label.includes('stop streaming') ||
                         label.includes('dừng tạo') ||
-                        label.includes('dừng phản hồi')
+                        label.includes('dừng phản hồi') ||
+                        label.includes('stop') ||
+                        label.includes('cancel') ||
+                        label.includes('hủy')
                     ) {
                         const rect = button.getBoundingClientRect();
                         const style = window.getComputedStyle(button);
@@ -844,13 +877,17 @@ def click_send_button(page):
         'button[data-testid="send-button"]',
         'button[aria-label="Send message"]',
         'button[aria-label="Gửi tin nhắn"]',
-        'button[aria-label="Submit message"]'
+        'button[aria-label="Submit message"]',
+        'button[aria-label*="Send" i]',
+        'button[aria-label*="Gửi" i]',
+        'button[aria-label*="Submit" i]',
+        'button.send-button'
     ]
 
     for sel in selectors:
         try:
             btn = page.locator(sel).last
-            if btn.count() > 0:
+            if btn.count() > 0 and btn.is_visible() and btn.is_enabled():
                 btn.click(timeout=4000, force=True)
                 sleep(0.8)
                 return True
@@ -864,7 +901,11 @@ def click_send_button(page):
                     'button[data-testid="send-button"]',
                     'button[aria-label="Send message"]',
                     'button[aria-label="Gửi tin nhắn"]',
-                    'button[aria-label="Submit message"]'
+                    'button[aria-label="Submit message"]',
+                    'button[aria-label*="Send" i]',
+                    'button[aria-label*="Gửi" i]',
+                    'button[aria-label*="Submit" i]',
+                    'button.send-button'
                 ];
 
                 for (const sel of candidates) {
@@ -978,12 +1019,12 @@ def get_assistant_response_signature(page):
     try:
         return page.evaluate("""
             () => {
-                let nodes = Array.from(document.querySelectorAll('[data-message-author-role="assistant"]'));
+                let nodes = Array.from(document.querySelectorAll('[data-message-author-role="assistant"], message-content, .message-content'));
 
                 if (nodes.length === 0) {
-                    nodes = Array.from(document.querySelectorAll('.markdown')).filter((node) => {
+                    nodes = Array.from(document.querySelectorAll('.markdown, .message-content')).filter((node) => {
                         const text = (node.innerText || node.textContent || '').trim();
-                        return text.length > 0 && !node.closest('#prompt-textarea');
+                        return text.length > 0 && !node.closest('#prompt-textarea') && !node.closest('.input-area-container') && !node.closest('rich-textarea');
                     });
                 }
 
@@ -1145,16 +1186,18 @@ def wait_response_after_send(page, timeout_start=90, timeout_done=900, resend_te
     return False
 
 
-def get_all_outputs(page):
+def get_all_image_srcs(page):
     try:
         return page.evaluate("""
             () => {
-                const prompt = document.querySelector('#prompt-textarea');
-                const composer = prompt ? (prompt.closest('form') || prompt.parentElement) : null;
+                const prompt = document.querySelector('#prompt-textarea') || 
+                               document.querySelector('.ql-editor[contenteditable="true"]') ||
+                               document.querySelector('rich-textarea div[contenteditable="true"]') ||
+                               document.querySelector('div[contenteditable="true"]');
+                const composer = prompt ? (prompt.closest('form') || prompt.closest('.input-area-container') || prompt.parentElement) : null;
                 const seen = new Set();
                 const result = [];
 
-                // 1. Raster images
                 for (const img of Array.from(document.querySelectorAll('img'))) {
                     if (composer && composer.contains(img)) continue;
 
@@ -1176,119 +1219,20 @@ def get_all_outputs(page):
                     if (seen.has(src)) continue;
 
                     seen.add(src);
-                    result.push({ kind: "raster", value: src });
-                }
-
-                // Helper to check if an element is inside composer, sidebar, nav, header, or generic UI we want to skip
-                const shouldSkip = (el) => {
-                    if (composer && composer.contains(el)) return true;
-
-                    let cur = el;
-                    while (cur) {
-                        const tag = cur.tagName.toLowerCase();
-                        const id = (cur.id || '').toLowerCase();
-                        const cls = (cur.getAttribute('class') || '').toLowerCase();
-                        const role = (cur.getAttribute('role') || '').toLowerCase();
-                        const testid = (cur.getAttribute('data-testid') || '').toLowerCase();
-
-                        if (
-                            tag === 'nav' || tag === 'header' || role === 'navigation' ||
-                            id.includes('sidebar') || cls.includes('sidebar') || testid.includes('sidebar') ||
-                            testid.includes('profile') || testid.includes('user')
-                        ) {
-                            return true;
-                        }
-                        cur = cur.parentElement;
-                    }
-                    return false;
-                };
-
-                // 2. SVG links and buttons
-                const candidates = Array.from(document.querySelectorAll('a, button, [role="link"], [role="button"], [download]'));
-                let linkIdx = 0;
-                for (const el of candidates) {
-                    if (shouldSkip(el)) continue;
-
-                    const rawHref = el.getAttribute('href') || '';
-                    const rawText = (el.innerText || el.textContent || '').trim();
-                    const rawDownload = el.getAttribute('download') || '';
-                    const rawTitle = el.getAttribute('title') || '';
-                    const ariaLabel = el.getAttribute('aria-label') || '';
-                    const testid = el.getAttribute('data-testid') || '';
-                    const role = el.getAttribute('role') || '';
-                    const outerHTML = el.outerHTML ? el.outerHTML.slice(0, 300) : '';
-
-                    const href = rawHref.toLowerCase();
-                    const text = rawText.toLowerCase();
-                    const downloadAttr = rawDownload.toLowerCase();
-                    const titleAttr = rawTitle.toLowerCase();
-
-                    // Keywords matching: svg, download, tải, tệp, vector, xml
-                    const matchesKeyword = (
-                        href.includes('svg') || href.includes('download') || href.startsWith('blob:') ||
-                        text.includes('svg') || text.includes('.svg') || text.includes('download') || text.includes('tải') || text.includes('tài') || text.includes('tệp') || text.includes('vector') || text.includes('xml') ||
-                        downloadAttr.includes('svg') || downloadAttr.includes('.svg') || downloadAttr.includes('download') ||
-                        titleAttr.includes('svg') || titleAttr.includes('download')
-                    );
-
-                    const isGenerating = (
-                        text.includes('generating') || text.includes('đang tạo') || 
-                        outerHTML.toLowerCase().includes('loading-shimmer')
-                    );
-
-                    if (matchesKeyword && !isGenerating) {
-                        let id = el.getAttribute('data-svg-id');
-                        if (!id) {
-                            linkIdx++;
-                            id = `svg-lnk-${Date.now()}-${linkIdx}-${Math.random().toString(36).substr(2, 5)}`;
-                            el.setAttribute('data-svg-id', id);
-                        }
-                        const tag = el.tagName.toLowerCase();
-                        const selector = `${tag}[data-svg-id="${id}"]`;
-
-                        const itemKey = `svg_download:${href}:${text}`;
-                        if (!seen.has(itemKey)) {
-                            seen.add(itemKey);
-                            result.push({
-                                kind: "svg_download",
-                                value: rawHref || rawText,
-                                href: rawHref,
-                                selector: selector,
-                                text: rawText,
-                                download: rawDownload,
-                                title: rawTitle,
-                                ariaLabel: ariaLabel,
-                                testid: testid,
-                                role: role,
-                                outerHTML: outerHTML
-                            });
-                        }
-                    }
+                    result.push(src);
                 }
 
                 return result;
             }
         """)
-    except Exception as e:
-        print(f"⚠ Lỗi get_all_outputs: {e}")
+    except Exception:
         return []
 
 
-def get_outcome_sig(item):
-    if item.get("kind") == "raster":
-        return ("raster", item.get("value"))
-    else:
-        return ("svg_download", item.get("value"), item.get("text"))
-
-
-def get_latest_new_outcome(page, old_sigs):
-    current = get_all_outputs(page)
-    new_outcomes = []
-    for item in current:
-        sig = get_outcome_sig(item)
-        if sig not in old_sigs:
-            new_outcomes.append(item)
-    return new_outcomes[-1] if new_outcomes else None
+def get_latest_new_image(page, old_list):
+    current = get_all_image_srcs(page)
+    new_imgs = [x for x in current if x not in old_list]
+    return new_imgs[-1] if new_imgs else None
 
 
 def run_dich_step(page):
@@ -1329,16 +1273,16 @@ def run_dich_step(page):
     return False
 
 
-def wait_image_generation_finished_or_image_ready(page, old_sigs, timeout=IMAGE_WAIT_TIMEOUT):
+def wait_image_generation_finished_or_image_ready(page, old_imgs, timeout=IMAGE_WAIT_TIMEOUT):
     """
-    Chờ riêng cho bước tạo ảnh/tệp theo kiểu KHÓA CỨNG.
+    Chờ riêng cho bước tạo ảnh theo kiểu KHÓA CỨNG.
 
     Nguyên tắc mới:
-    - Sau khi đã gửi prompt tạo ảnh/tệp thì KHÔNG retry sớm.
+    - Sau khi đã gửi prompt tạo ảnh thì KHÔNG retry sớm.
     - Không dựa vào việc mất nút Stop để kết luận fail.
     - Không dựa vào idle tạm thời để retry.
     - Chỉ thoát khi:
-        1. Có kết quả mới (ảnh/SVG);
+        1. Có ảnh mới;
         2. Có lỗi rõ ràng trên màn hình và đã chờ thêm đủ lâu;
         3. Hết timeout dài IMAGE_WAIT_TIMEOUT.
     """
@@ -1349,25 +1293,25 @@ def wait_image_generation_finished_or_image_ready(page, old_sigs, timeout=IMAGE_
     while time.time() - start < timeout:
         wait_if_cloudflare(page)
 
-        outcome = get_latest_new_outcome(page, old_sigs)
-        if outcome:
-            print(f"✓ Có kết quả mới: {outcome.get('kind')}")
-            return outcome
+        img_url = get_latest_new_image(page, old_imgs)
+        if img_url:
+            print("✓ Có ảnh mới")
+            return img_url
 
         elapsed = int(time.time() - start)
 
         if has_clear_generation_error(page):
             if first_clear_error_time is None:
                 first_clear_error_time = time.time()
-                print("⚠ Phát hiện thông báo lỗi tạo ảnh/tệp, chờ thêm để chắc chắn...")
+                print("⚠ Phát hiện thông báo lỗi tạo ảnh, chờ thêm để chắc chắn...")
 
-            # Có lỗi rõ ràng thì vẫn chờ thêm 90 giây, vì đôi khi ảnh/SVG vẫn ra muộn.
+            # Có lỗi rõ ràng thì vẫn chờ thêm 90 giây, vì đôi khi ảnh vẫn ra muộn.
             if time.time() - first_clear_error_time >= 90:
-                outcome = get_latest_new_outcome(page, old_sigs)
-                if outcome:
-                    print(f"✓ Có kết quả mới: {outcome.get('kind')}")
-                    return outcome
-                print("⚠ Lỗi tạo ảnh/tệp rõ ràng và không có kết quả sau khi chờ thêm")
+                img_url = get_latest_new_image(page, old_imgs)
+                if img_url:
+                    print("✓ Có ảnh mới")
+                    return img_url
+                print("⚠ Lỗi tạo ảnh rõ ràng và không có ảnh sau khi chờ thêm")
                 return None
         else:
             first_clear_error_time = None
@@ -1375,25 +1319,21 @@ def wait_image_generation_finished_or_image_ready(page, old_sigs, timeout=IMAGE_
         # Log định kỳ, không kết luận fail khi idle.
         if time.time() - last_log >= 30:
             state = "đang xử lý" if is_generating(page) else "chưa có tín hiệu xử lý rõ, vẫn tiếp tục chờ"
-            all_outs = get_all_outputs(page)
-            print(f"  ⏳ Chờ kết quả mới... {elapsed}s | trạng thái: {state} | Quét được {len(all_outs)} outputs")
-            for item in all_outs[:5]:
-                print(f"    - Output: kind={item.get('kind')}, text='{item.get('text', '').strip()}', value='{item.get('value', '')[:100]}'")
+            print(f"  ⏳ Chờ ảnh mới... {elapsed}s | trạng thái: {state}")
             last_log = time.time()
 
         sleep(10)
 
-    print("⚠ Hết timeout dài nhưng chưa thấy kết quả mới")
+    print("⚠ Hết timeout dài nhưng chưa thấy ảnh mới")
     return None
 
 
-def try_create_image(page, old_sigs):
+def try_create_image(page, old_imgs):
     for attempt in range(1, MAX_RETRY_IMAGE + 1):
-        print(f"→ Tạo ảnh/tệp lần {attempt}")
+        print(f"→ Tạo ảnh lần {attempt}")
 
-        before_send_outputs = get_all_outputs(page)
-        before_send_sigs = {get_outcome_sig(x) for x in before_send_outputs}
-        merged_old_sigs = old_sigs.union(before_send_sigs)
+        before_send_imgs = get_all_image_srcs(page)
+        merged_old_imgs = list(dict.fromkeys(old_imgs + before_send_imgs))
 
         send_prompt(page, PROMPT_TAO_ANH, max_send_attempts=1)
 
@@ -1401,34 +1341,34 @@ def try_create_image(page, old_sigs):
         # Sau đó chuyển sang hàm chờ ảnh riêng bên dưới.
         started = False
         start = time.time()
-        print("⏳ Chờ ChatGPT bắt đầu tạo...")
+        print("⏳ Chờ ChatGPT bắt đầu tạo ảnh...")
         while time.time() - start < 120:
             wait_if_cloudflare(page)
             if is_generating(page):
                 started = True
                 break
-            outcome = get_latest_new_outcome(page, merged_old_sigs)
-            if outcome:
-                print(f"✓ Có kết quả mới: {outcome.get('kind')}")
-                return outcome
+            img_url = get_latest_new_image(page, merged_old_imgs)
+            if img_url:
+                print("✓ Có ảnh mới")
+                return img_url
             sleep(2)
 
         if not started:
             current_text = get_prompt_text(page)
             if PROMPT_TAO_ANH in current_text:
-                raise Exception("Prompt tạo ảnh/tệp vẫn còn trong ô nhập sau khi gửi; dừng để tránh gửi trùng.")
+                raise Exception("Prompt tạo ảnh vẫn còn trong ô nhập sau khi gửi; dừng để tránh gửi trùng.")
 
-        outcome = wait_image_generation_finished_or_image_ready(
+        img_url = wait_image_generation_finished_or_image_ready(
             page,
-            merged_old_sigs,
+            merged_old_imgs,
             timeout=IMAGE_WAIT_TIMEOUT
         )
 
-        if outcome:
-            return outcome
+        if img_url:
+            return img_url
 
         # Trước khi retry lần sau, chờ chắc chắn ChatGPT đã thật sự dừng.
-        print("⚠ Chưa lấy được kết quả → chuẩn bị retry, chờ ChatGPT idle chắc chắn")
+        print("⚠ Chưa lấy được ảnh → chuẩn bị retry, chờ ChatGPT idle chắc chắn")
         idle_start = time.time()
         while time.time() - idle_start < 120:
             wait_if_cloudflare(page)
@@ -1441,6 +1381,179 @@ def try_create_image(page, old_sigs):
         sleep(10)
 
     return None
+
+
+def find_gemini_viewer_download_button(page):
+    overlay = page.locator(".cdk-overlay-container, [role='dialog']").last
+    overlay.wait_for(state="visible", timeout=10000)
+    print("✓ Viewer Gemini đã mở")
+    print("→ Tìm nút download trong overlay viewer")
+
+    # 1. Try direct selectors
+    selectors = [
+        'button[aria-label*="Tải ảnh có kích thước đầy đủ xuống" i]',
+        'button[aria-label*="Tải xuống" i]',
+        'button[aria-label*="Download" i]',
+        'button[title*="Tải ảnh có kích thước đầy đủ xuống" i]',
+        'button[title*="Download" i]',
+    ]
+
+    print("→ Thử selector aria-label/title download")
+    for sel in selectors:
+        btn = overlay.locator(sel)
+        if btn.count() > 0:
+            for idx in range(btn.count()):
+                candidate = btn.nth(idx)
+                if candidate.is_visible() and candidate.is_enabled():
+                    return candidate
+
+    # 2. Try tooltip verification by hovering
+    print("→ Thử tooltip “Tải ảnh có kích thước đầy đủ xuống”")
+    buttons = overlay.locator('button')
+    btn_count = buttons.count()
+    for idx in range(btn_count):
+        btn = buttons.nth(idx)
+        if btn.is_visible() and btn.is_enabled():
+            try:
+                btn.hover()
+                sleep(0.5)
+                tooltip_loc = page.locator('.mat-tooltip, .tooltip, [role="tooltip"], .cdk-overlay-container')
+                tooltip_text = ""
+                for t_idx in range(tooltip_loc.count()):
+                    t_el = tooltip_loc.nth(t_idx)
+                    if t_el.is_visible():
+                        tooltip_text += (t_el.inner_text() or "") + " "
+                
+                low_text = tooltip_text.lower()
+                if any(w in low_text for w in ["tải ảnh có kích thước đầy đủ xuống", "tải xuống", "download full-size", "download"]):
+                    if not any(w in low_text for w in ["chia sẻ", "share", "sao chép", "copy", "đóng", "close"]):
+                        return btn
+            except Exception:
+                pass
+
+    # 3. Fallback by position (excluding other buttons)
+    print("→ Thử fallback theo vị trí toolbar")
+    candidates = []
+    for idx in range(btn_count):
+        btn = buttons.nth(idx)
+        if btn.is_visible() and btn.is_enabled():
+            lbl = (btn.get_attribute("aria-label") or "").lower()
+            title = (btn.get_attribute("title") or "").lower()
+            
+            exclude_keywords = [
+                "share", "chia sẻ",
+                "copy", "sao chép",
+                "undo", "hoàn tác",
+                "redo", "làm lại",
+                "save", "lưu",
+                "close", "đóng", "x"
+            ]
+            
+            is_excluded = False
+            for kw in exclude_keywords:
+                if kw in lbl or kw in title:
+                    is_excluded = True
+                    break
+                    
+            if not is_excluded:
+                candidates.append(btn)
+
+    if candidates:
+        return candidates[-1]
+
+    return None
+
+
+def download_gemini_fullsize_image(page, output_path):
+    print("→ Tải ảnh full-size từ Gemini")
+    
+    for attempt in range(1, 4):
+        print(f"→ Thử tải ảnh full-size lần {attempt}")
+        try:
+            viewer_open = False
+            try:
+                overlay = page.locator(".cdk-overlay-container, [role='dialog']").last
+                if overlay.count() > 0 and overlay.is_visible():
+                    viewer_open = True
+            except Exception:
+                pass
+
+            if not viewer_open:
+                print("→ Click ảnh kết quả cuối cùng để mở viewer")
+                img_loc = page.locator('message-content img, .message-content img')
+                if img_loc.count() == 0:
+                    img_loc = page.locator('img')
+                    
+                if img_loc.count() > 0:
+                    last_img = img_loc.last
+                    last_img.scroll_into_view_if_needed()
+                    last_img.hover()
+                    sleep(1)
+                    last_img.click(force=True)
+                    sleep(2)
+                else:
+                    print("⚠ Không tìm thấy ảnh kết quả nào trên trang")
+                    sleep(2)
+                    continue
+
+            btn = find_gemini_viewer_download_button(page)
+            
+            if btn:
+                print("→ Bấm nút download full-size trong toolbar")
+                with page.expect_download(timeout=60000) as download_info:
+                    btn.click(force=True)
+                
+                download = download_info.value
+                download.save_as(output_path)
+                
+                sleep(1.5)
+                try:
+                    toast_visible = page.locator('text="Đang tải hình ảnh có kích thước đầy đủ xuống", text="Downloading full-size image", text*="kích thước đầy đủ", text*="full-size image"').count() > 0
+                    if toast_visible:
+                        print("✓ Gemini xác nhận đang tải ảnh full-size")
+                except Exception:
+                    pass
+                    
+                if os.path.exists(output_path) and os.path.getsize(output_path) > 10000:
+                    print(f"✓ Đã lưu ảnh full-size: {output_path}")
+                    try:
+                        page.keyboard.press("Escape")
+                        sleep(1)
+                    except Exception:
+                        pass
+                    return True
+            else:
+                print(f"⚠ Viewer đã mở nhưng chưa tìm thấy nút download trong overlay lần {attempt}")
+                sleep(2)
+        except Exception as e:
+            print(f"⚠ Lỗi ở lần thử {attempt}: {e}")
+            try:
+                page.keyboard.press("Escape")
+            except Exception:
+                pass
+            sleep(2)
+            
+    print("⚠ Không tải được ảnh full-size, fallback screenshot preview chất lượng thấp")
+    try:
+        img_loc = page.locator('message-content img, .message-content img')
+        if img_loc.count() == 0:
+            img_loc = page.locator('img')
+        if img_loc.count() > 0:
+            last_img = img_loc.last
+            last_img.scroll_into_view_if_needed()
+            last_img.wait_for(state="visible", timeout=15000)
+            last_img.screenshot(path=output_path)
+            if os.path.exists(output_path) and os.path.getsize(output_path) > 10000:
+                print(f"✓ Đã lưu ảnh: {output_path}")
+                return True
+    except Exception as e:
+        print(f"  ↳ Fallback screenshot thất bại: {e}")
+        
+    raise Exception("Không tải được ảnh sau tất cả các phương thức kể cả fallback screenshot")
+
+
+def download_gemini_image(page, path):
+    return download_gemini_fullsize_image(page, path)
 
 
 def download_image(page, url, path):
@@ -1483,688 +1596,40 @@ def download_image(page, url, path):
 
     raise Exception("Không tải được ảnh")
 
-def read_downloaded_svg_preview(path, limit=200):
-    try:
-        with open(path, "r", encoding="utf-8", errors="ignore") as f:
-            return f.read(limit).replace("\n", " ").strip()
-    except Exception:
-        return ""
-
-
-def ensure_downloaded_svg(path):
-    if not os.path.exists(path):
-        raise Exception("File SVG chưa được ghi ra ổ đĩa")
-
-    size = os.path.getsize(path)
-    if size <= 100:
-        raise Exception(f"File SVG quá nhỏ ({size} bytes)")
-
-    preview = read_downloaded_svg_preview(path)
-    try:
-        with open(path, "r", encoding="utf-8", errors="ignore") as f:
-            content = f.read()
-    except Exception as e:
-        raise Exception(f"Không đọc được SVG sau khi tải: {e}")
-
-    if "<svg" not in content.lower():
-        raise Exception(f"Nội dung tải về không phải SVG. Đoạn đầu: {preview}")
-
-
-def write_data_url_to_file(data_url, path):
-    header, payload = data_url.split(",", 1)
-    if ";base64" in header.lower():
-        data = base64.b64decode(payload)
-    else:
-        data = unquote_to_bytes(payload)
-    with open(path, "wb") as f:
-        f.write(data)
-
-
-def normalize_download_href(page, href):
-    if not href:
-        return ""
-    return page.evaluate(
-        """(href) => new URL(href, window.location.origin).toString()""",
-        href
-    )
-
-
-def is_fetchable_href(href):
-    if not href:
-        return False
-
-    low = href.strip().lower()
-    return (
-        low.startswith("http://") or
-        low.startswith("https://") or
-        low.startswith("/backend-api/") or
-        low.startswith("backend-api/") or
-        low.startswith("blob:") or
-        low.startswith("data:image")
-    )
-
-
-def fetch_svg_href(page, href, temp_path):
-    url = normalize_download_href(page, href)
-    if not url:
-        raise Exception("Không có href để fetch")
-
-    if url.startswith("data:image"):
-        print("  ↳ Tải SVG từ data URL")
-        write_data_url_to_file(url, temp_path)
-        ensure_downloaded_svg(temp_path)
-        return True
-
-    print(f"  ↳ Tải SVG từ href: {url[:160]}")
-    result = page.evaluate("""
-        async (u) => {
-            const r = await fetch(u, { credentials: 'include' });
-            const text = await r.text();
-            return {
-                ok: r.ok,
-                status: r.status,
-                url: r.url,
-                contentType: r.headers.get('content-type') || '',
-                text
-            };
-        }
-    """, url)
-
-    text = result.get("text") or ""
-    with open(temp_path, "w", encoding="utf-8", newline="") as f:
-        f.write(text)
-
-    if not result.get("ok"):
-        preview = text[:200].replace("\n", " ").strip()
-        raise Exception(
-            f"Fetch SVG HTTP {result.get('status')} | type={result.get('contentType')} | đoạn đầu: {preview}"
-        )
-
-    ensure_downloaded_svg(temp_path)
-    return True
-
-
-def find_svg_href_by_selector_or_text(page, selector):
-    return page.evaluate("""
-        (sel) => {
-            const fromSelector = sel ? document.querySelector(sel) : null;
-            const candidates = [
-                fromSelector,
-                ...Array.from(document.querySelectorAll('a, [role="link"], button, [role="button"], [download]'))
-            ].filter(Boolean);
-
-            for (const el of candidates) {
-                const href = el.getAttribute('href') || '';
-                const text = (el.innerText || el.textContent || '').trim();
-                const download = el.getAttribute('download') || '';
-                const haystack = `${href} ${text} ${download}`.toLowerCase();
-                if (haystack.includes('.svg') || haystack.includes('svg') || haystack.includes('download svg') || haystack.includes('tải svg')) {
-                    return href;
-                }
-            }
-            return '';
-        }
-    """, selector or "")
-
-
-def click_svg_download(page, outcome, temp_path):
-    selector = outcome.get("selector") or ""
-    locators_to_try = []
-    if selector:
-        locators_to_try.append(("selector", page.locator(selector)))
-    locators_to_try.extend([
-        ("text '.svg'", page.get_by_text(".svg", exact=False).last),
-        ("text 'Download SVG'", page.get_by_text("Download SVG", exact=False).last),
-        ("text 'Tải SVG'", page.get_by_text("Tải SVG", exact=False).last),
-        ("text 'Tải SVG bản dịch'", page.get_by_text("Tải SVG bản dịch", exact=False).last)
-    ])
-
-    last_error = None
-    for name, loc in locators_to_try:
-        try:
-            if loc.count() > 0:
-                print(f"  ↳ Tải bằng click: {name}")
-                with page.expect_download(timeout=15000) as download_info:
-                    loc.click(timeout=8000)
-                download = download_info.value
-                download.save_as(temp_path)
-                ensure_downloaded_svg(temp_path)
-                return True
-        except Exception as e:
-            last_error = e
-            print(f"  ↳ Click {name} chưa tải được, thử cách khác")
-
-    raise Exception(f"Click không tải được SVG: {last_error}")
-
-
-def get_download_dirs():
-    dirs = [DOWNLOAD_FOLDER]
-    try:
-        user_downloads = os.path.join(os.environ['USERPROFILE'], 'Downloads')
-        if os.path.exists(user_downloads):
-            dirs.append(user_downloads)
-    except Exception:
-        pass
-    return dirs
-
-
-def get_download_dirs_files():
-    files = {}
-    for d in get_download_dirs():
-        if not os.path.exists(d):
-            continue
-        try:
-            for entry in os.scandir(d):
-                if entry.is_file():
-                    files[entry.path] = entry.stat().st_mtime
-        except Exception:
-            pass
-    return files
-
-
-def find_newly_downloaded_file(before_files):
-    for _ in range(6):
-        current_files = get_download_dirs_files()
-        new_files = []
-        for path, mtime in current_files.items():
-            if path not in before_files:
-                new_files.append((path, mtime))
-            elif mtime > before_files[path]:
-                new_files.append((path, mtime))
-
-        if new_files:
-            new_files.sort(key=lambda x: x[1], reverse=True)
-            for path, _ in new_files:
-                low = path.lower()
-                if low.endswith(".crdownload") or low.endswith(".tmp") or low.endswith(".part"):
-                    sleep(0.5)
-                    continue
-                if low.endswith(".svg"):
-                    return path
-                try:
-                    if os.path.getsize(path) > 100:
-                        with open(path, "r", encoding="utf-8", errors="ignore") as f:
-                            content = f.read(2048)
-                        if "<svg" in content.lower():
-                            return path
-                except Exception:
-                    pass
-        sleep(0.5)
-    return None
-
-
-def get_last_assistant_text(page):
-    try:
-        return page.evaluate("""
-            () => {
-                let nodes = Array.from(
-                    document.querySelectorAll('[data-message-author-role="assistant"]')
-                );
-                if (!nodes.length) {
-                    nodes = Array.from(
-                        document.querySelectorAll('.agent-turn, .markdown, div.result-streaming')
-                    );
-                }
-                if (!nodes.length) return "";
-                const last = nodes[nodes.length - 1];
-                return last.innerText || last.textContent || "";
-            }
-        """)
-    except Exception as e:
-        print(f"⚠ Lỗi get_last_assistant_text: {e}")
-        return ""
-
-
-def extract_json_from_text(text: str) -> dict:
-    import re
-    if not text:
-        raise ValueError("Nội dung text rỗng")
-        
-    # 1. Thử trích xuất từ markdown code blocks (```json ... ``` hoặc ``` ... ```)
-    match = re.search(r"```(?:json)?(.*?)```", text, re.DOTALL | re.IGNORECASE)
-    if match:
-        content = match.group(1).strip()
-        first_brace = content.find("{")
-        last_brace = content.rfind("}")
-        if first_brace != -1 and last_brace != -1 and last_brace >= first_brace:
-            json_str = content[first_brace:last_brace + 1].strip()
-            try:
-                return json.loads(json_str)
-            except Exception as e:
-                raise ValueError(f"Lỗi parse JSON từ code block: {e}")
-                
-    # 2. Tìm cặp ngoặc { ... } bên ngoài cùng trong toàn bộ text
-    first_brace = text.find("{")
-    last_brace = text.rfind("}")
-    if first_brace != -1 and last_brace != -1 and last_brace >= first_brace:
-        json_str = text[first_brace:last_brace + 1].strip()
-        try:
-            return json.loads(json_str)
-        except Exception as e:
-            raise ValueError(f"Lỗi parse JSON từ văn bản: {e}")
-            
-    raise ValueError("Không tìm thấy cấu trúc JSON hợp lệ trong phản hồi")
-
-
-def extract_svg_from_dom(page):
-    try:
-        svg_content = page.evaluate("""
-            () => {
-                const assistantNodes = Array.from(document.querySelectorAll('[data-message-author-role="assistant"]'));
-                for (const node of assistantNodes) {
-                    const svgEl = node.querySelector('svg');
-                    if (svgEl) {
-                        return svgEl.outerHTML;
-                    }
-                }
-
-                const codeBlocks = Array.from(document.querySelectorAll('pre, code, div.markdown'));
-                for (const block of codeBlocks) {
-                    const text = (block.innerText || block.textContent || '').trim();
-                    if (text.includes('<svg') && text.includes('</svg>')) {
-                        const startIdx = text.indexOf('<svg');
-                        const endIdx = text.indexOf('</svg>', startIdx);
-                        if (startIdx !== -1 && endIdx !== -1) {
-                            return text.slice(startIdx, endIdx + 6);
-                        }
-                    }
-                }
-
-                const svgEls = Array.from(document.querySelectorAll('svg'));
-                for (const svgEl of svgEls) {
-                    const prompt = document.querySelector('#prompt-textarea');
-                    const composer = prompt ? (prompt.closest('form') || prompt.parentElement) : null;
-                    if (composer && composer.contains(svgEl)) continue;
-
-                    let cur = svgEl;
-                    let skip = false;
-                    while (cur) {
-                        const tag = cur.tagName.toLowerCase();
-                        const id = (cur.id || '').toLowerCase();
-                        const cls = (cur.getAttribute('class') || '').toLowerCase();
-                        if (tag === 'nav' || tag === 'header' || id.includes('sidebar') || cls.includes('sidebar')) {
-                            skip = true;
-                            break;
-                        }
-                        cur = cur.parentElement;
-                    }
-                    if (!skip) {
-                        const box = svgEl.getBoundingClientRect();
-                        if (box.width > 20 && box.height > 20) {
-                            return svgEl.outerHTML;
-                        }
-                    }
-                }
-                return '';
-            }
-        """)
-        return svg_content
-    except Exception as e:
-        print(f"  ⚠ Lỗi extract_svg_from_dom: {e}")
-        return ""
-
-
-def click_element_without_expect_download(page, outcome):
-    selector = outcome.get("selector") or ""
-    locators_to_try = []
-    if selector:
-        locators_to_try.append(("selector", page.locator(selector)))
-    locators_to_try.extend([
-        ("text '.svg'", page.get_by_text(".svg", exact=False).last),
-        ("text 'Download SVG'", page.get_by_text("Download SVG", exact=False).last),
-        ("text 'Tải SVG'", page.get_by_text("Tải SVG", exact=False).last),
-        ("text 'Tải SVG bản dịch'", page.get_by_text("Tải SVG bản dịch", exact=False).last)
-    ])
-
-    for name, loc in locators_to_try:
-        try:
-            if loc.count() > 0:
-                print(f"  ↳ Thử click không expect_download: {name}")
-                loc.click(timeout=5000)
-                return True
-        except Exception as e:
-            print(f"  ↳ Click {name} (không expect_download) lỗi: {e}")
-    return False
-
-
-def download_svg_output(page, outcome, temp_svg_path):
-    print("→ Tải SVG")
-    temp_path = temp_svg_path
-
-    # 1. Thử fetch href trước nếu có href hợp lệ
-    hrefs = [
-        outcome.get("href") or "",
-        find_svg_href_by_selector_or_text(page, outcome.get("selector") or "")
-    ]
-
-    valid_hrefs = []
-    for h in hrefs:
-        if h and is_fetchable_href(h) and h not in valid_hrefs:
-            valid_hrefs.append(h)
-
-    for href in valid_hrefs:
-        try:
-            print(f"  ↳ Thử fetch SVG từ: {href[:120]}")
-            if fetch_svg_href(page, href, temp_path):
-                return temp_path
-        except Exception as e:
-            print(f"  ↳ Fetch SVG thất bại: {e}")
-            if os.path.exists(temp_path):
-                try:
-                    os.remove(temp_path)
-                except Exception:
-                    pass
-
-    # 2. Click không expect_download và quét file mới
-    print("  ↳ Thử click không expect_download + quét file mới")
-    before_files = get_download_dirs_files()
-    if click_element_without_expect_download(page, outcome):
-        new_file = find_newly_downloaded_file(before_files)
-        if new_file:
-            print(f"  ✓ Phát hiện file tải về mới: {new_file}")
-            try:
-                shutil.copy2(new_file, temp_path)
-                ensure_downloaded_svg(temp_path)
-                return temp_path
-            except Exception as e:
-                print(f"  ↳ Copy file mới tải thất bại: {e}")
-                if os.path.exists(temp_path):
-                    try:
-                        os.remove(temp_path)
-                    except Exception:
-                        pass
-
-    # 3. Click dùng expect_download (Playwright standard)
-    print("  ↳ Thử click dùng expect_download")
-    try:
-        if click_svg_download(page, outcome, temp_path):
-            return temp_path
-    except Exception as e:
-        print(f"  ↳ Click dùng expect_download thất bại: {e}")
-        if os.path.exists(temp_path):
-            try:
-                os.remove(temp_path)
-            except Exception:
-                pass
-
-    # 4. Thử đọc trực tiếp từ DOM
-    print("  ↳ Thử đọc SVG trực tiếp từ DOM")
-    dom_svg = extract_svg_from_dom(page)
-    if dom_svg:
-        try:
-            with open(temp_path, "w", encoding="utf-8", newline="") as f:
-                f.write(dom_svg)
-            ensure_downloaded_svg(temp_path)
-            print("  ✓ Đã lấy SVG thành công trực tiếp từ DOM")
-            return temp_path
-        except Exception as e:
-            print(f"  ↳ Đọc DOM SVG thất bại: {e}")
-            if os.path.exists(temp_path):
-                try:
-                    os.remove(temp_path)
-                except Exception:
-                    pass
-
-    # In thông tin chi tiết khi thất bại hoàn toàn
-    print(f"  ⚠ Chi tiết SVG outcome:")
-    print(f"    - kind: {outcome.get('kind')}")
-    print(f"    - value: {outcome.get('value')}")
-    print(f"    - href: {outcome.get('href')}")
-    print(f"    - selector: {outcome.get('selector')}")
-    print(f"    - text: {outcome.get('text')}")
-    print(f"    - aria-label: {outcome.get('ariaLabel')}")
-    print(f"    - data-testid: {outcome.get('testid')}")
-    print(f"    - role: {outcome.get('role')}")
-    print(f"    - outerHTML: {outcome.get('outerHTML')}")
-
-    raise Exception("Không tải được SVG qua bất kỳ phương pháp nào (fetch, click, quét file, DOM extraction)")
-
-
-def validate_and_process_svg(temp_download_path, target_svg_path):
-    if not os.path.exists(temp_download_path):
-        raise Exception("Không tìm thấy file SVG đã tải")
-
-    size = os.path.getsize(temp_download_path)
-    if size < 100:
-        raise Exception(f"File SVG quá nhỏ ({size} bytes)")
-
-    try:
-        with open(temp_download_path, "r", encoding="utf-8", errors="ignore") as f:
-            content = f.read()
-    except Exception as e:
-        raise Exception(f"Không đọc được nội dung SVG: {e}")
-
-    if "<svg" not in content.lower():
-        # Genuine bad file (not containing svg tag) - rename to bad.svg
-        bad_svg_path = target_svg_path.replace(".svg", ".bad.svg")
-        if os.path.exists(bad_svg_path):
-            try:
-                os.remove(bad_svg_path)
-            except Exception:
-                pass
-        os.rename(temp_download_path, bad_svg_path)
-        raise Exception("Nội dung file không chứa thẻ <svg>.")
-
-    # Valid SVG format content-wise - save to final target path immediately
-    if os.path.exists(target_svg_path):
-        try:
-            os.remove(target_svg_path)
-        except Exception:
-            pass
-    os.rename(temp_download_path, target_svg_path)
-
-    return True
-
-
-def send_svg_instruction(page):
-    if not PROMPT_SVG_INSTRUCTION.strip():
-        return
-    print("→ Gửi SVG instruction nền")
-    before_response = get_assistant_response_signature(page)
-    send_prompt(page, PROMPT_SVG_INSTRUCTION)
-    wait_response_after_send(
-        page,
-        timeout_start=90,
-        timeout_done=900,
-        resend_text=PROMPT_SVG_INSTRUCTION,
-        before_signature=before_response
-    )
-
-
-
-
 
 def process_one(page, all_images, img):
     index = all_images.index(img) + 1
-    
-    if OUTPUT_MODE == "image":
-        save_name = get_output_name(img)
-        save_path = os.path.join(DOWNLOAD_FOLDER, save_name)
+    save_name = get_output_name(img)
+    save_path = os.path.join(DOWNLOAD_FOLDER, save_name)
 
-        print(f"\n--- {index}: {img.name} → {save_name} ---")
+    print(f"\n--- {index}: {img.name} → {save_name} ---")
 
-        reset_chat(page)
-        send_svg_instruction(page)
-        upload_image(page, img)
-        wait_upload_attached(page, timeout=90)
+    reset_chat(page)
+    upload_image(page, img)
+    wait_upload_attached(page, timeout=90)
 
-        if not run_dich_step(page):
-            raise Exception("Bước Dịch quá thời gian chờ sau nhiều lần thử")
+    if not run_dich_step(page):
+        raise Exception("Bước Dịch quá thời gian chờ sau nhiều lần thử")
 
-        sleep(5)
+    sleep(5)
 
-        old_outputs = get_all_outputs(page)
-        old_sigs = {get_outcome_sig(x) for x in old_outputs}
+    old_imgs = get_all_image_srcs(page)
 
-        outcome = try_create_image(page, old_sigs)
+    img_url = try_create_image(page, old_imgs)
 
-        if not outcome:
-            raise Exception("Không tạo được ảnh/tệp sau nhiều lần thử")
+    if not img_url:
+        raise Exception("Không tạo được ảnh sau nhiều lần thử")
 
-        if outcome.get("kind") == "raster":
-            download_image(page, outcome["value"], save_path)
-            if os.path.exists(save_path) and os.path.getsize(save_path) > 10000:
-                print("✓ DONE")
-                write_progress(index, img.name, save_name, "done", "OK")
-            else:
-                raise Exception("File tải lỗi hoặc quá nhỏ")
-        elif outcome.get("kind") == "svg_download":
-            svg_name = get_svg_name_from_png(save_name)
-            svg_path = os.path.join(DOWNLOAD_FOLDER, svg_name)
-            bad_svg_path = svg_path.replace(".svg", ".bad.svg")
+    if SERVICE == "gemini":
+        download_gemini_image(page, save_path)
+    else:
+        download_image(page, img_url, save_path)
 
-            # Restore bad.svg to .svg if it exists from previous run but .svg is missing
-            if os.path.exists(bad_svg_path) and not os.path.exists(svg_path):
-                try:
-                    os.rename(bad_svg_path, svg_path)
-                except Exception:
-                    pass
-
-            temp_download_path = os.path.join(DOWNLOAD_FOLDER, f"{svg_name}.part")
-
-            # Clean up old temp files
-            for path_to_clean in [temp_download_path, temp_download_path + ".part"]:
-                if os.path.exists(path_to_clean):
-                    try:
-                        os.remove(path_to_clean)
-                    except Exception:
-                        pass
-
-            download_svg_output(page, outcome, temp_download_path)
-            validate_and_process_svg(temp_download_path, svg_path)
-
-            if os.path.exists(svg_path) and os.path.getsize(svg_path) > 100:
-                print("✓ DONE (SVG)")
-                write_progress(index, img.name, svg_name, "done", "OK (SVG)")
-            else:
-                raise Exception("File SVG lỗi hoặc quá nhỏ")
-                
-    elif OUTPUT_MODE == "svg_json":
-        print(f"\n--- {index}: {img.name} (SVG JSON Mode) ---")
-        
-        # 1. Reset chat & upload ảnh như cũ
-        reset_chat(page)
-        upload_image(page, img)
-        wait_upload_attached(page, timeout=90)
-        
-        # 2. Gửi prompt "chép lại nguyên văn" và "dịch bản chép lại"
-        print("→ Bắt đầu bước dịch (chép lại + dịch)")
-        if not run_dich_step(page):
-            raise Exception("Bước Dịch quá thời gian chờ sau nhiều lần thử")
-            
-        sleep(5)
-        
-        # 3. Gửi PROMPT_SVG_JSON_LAYOUT
-        print("→ Gửi prompt JSON Layout")
-        before_response = get_assistant_response_signature(page)
-        send_prompt(page, PROMPT_SVG_JSON_LAYOUT)
-        
-        # Chờ assistant trả lời xong
-        print("⏳ Chờ ChatGPT phản hồi JSON Layout...")
-        if not wait_response_after_send(
-            page,
-            timeout_start=90,
-            timeout_done=900,
-            resend_text=PROMPT_SVG_JSON_LAYOUT,
-            before_signature=before_response
-        ):
-            raise Exception("Chờ phản hồi JSON Layout quá thời gian")
-            
-        # Lấy text assistant cuối cùng
-        text = get_last_assistant_text(page)
-        if not text:
-            raise Exception("Không lấy được nội dung phản hồi của assistant")
-            
-        # Extract JSON
-        print("→ Trích xuất JSON từ phản hồi")
-        layout = extract_json_from_text(text)
-        
-        # Đảm bảo thư mục lưu output tồn tại
-        output_dir = BASE_DIR / "output"
-        json_layout_dir = output_dir / "json_layout"
-        svg_dir = output_dir / "svg"
-        failed_dir = output_dir / "failed"
-        
-        os.makedirs(json_layout_dir, exist_ok=True)
-        os.makedirs(svg_dir, exist_ok=True)
-        os.makedirs(failed_dir, exist_ok=True)
-        
-        img_stem = img.stem
-        json_path = json_layout_dir / f"{img_stem}.json"
-        svg_path = svg_dir / f"{img_stem}.svg"
-        
-        # Lưu JSON
-        with open(json_path, "w", encoding="utf-8") as f:
-            json.dump(layout, f, ensure_ascii=False, indent=2)
-        print(f"✓ Đã lưu JSON vào: {json_path}")
-        
-        # Validate layout
-        print("→ Kiểm tra (validate) layout")
-        severe_errors, warning_errors = validate_layout_classified(layout)
-        
-        # Render SVG (chỉ render nếu không có lỗi nghiêm trọng từ validation)
-        render_warnings = []
-        if not severe_errors:
-            print("→ Render SVG")
-            render_warnings = render_svg(layout, str(svg_path))
-            print(f"✓ Đã lưu SVG vào: {svg_path}")
-            
-            # Phân loại warnings từ render_svg
-            for warn in render_warnings:
-                if warn.startswith("[SEVERE]"):
-                    severe_errors.append(warn[len("[SEVERE]"):].strip())
-                else:
-                    clean_warn = warn[len("[WARNING]"):].strip() if warn.startswith("[WARNING]") else warn
-                    warning_errors.append(clean_warn)
-                    
-        # Nếu có lỗi nghiêm trọng (Severe)
-        if severe_errors:
-            print(f"[FAILED] {img.name} thất bại do lỗi nghiêm trọng: {severe_errors}")
-            # Ghi thông tin lỗi và copy ảnh gốc vào output/failed
-            failed_img_path = failed_dir / img.name
-            error_txt_path = failed_dir / f"{img_stem}_error.txt"
-            
-            try:
-                shutil.copy2(img, failed_img_path)
-                with open(error_txt_path, "w", encoding="utf-8") as f:
-                    f.write(f"File: {img.name}\n")
-                    f.write(f"Time: {datetime.now().isoformat()}\n")
-                    f.write("Severe Layout/Rendering Errors:\n")
-                    for err in severe_errors:
-                        f.write(f"- {err}\n")
-                    if warning_errors:
-                        f.write("\nWarnings:\n")
-                        for warn in warning_errors:
-                            f.write(f"- {warn}\n")
-                print(f"✓ Đã copy ảnh gốc và ghi log lỗi vào: {failed_dir}")
-            except Exception as e_failed:
-                print(f"⚠ Lỗi khi lưu log thất bại: {e_failed}")
-                
-            raise Exception(f"Severe errors: {'; '.join(severe_errors)}")
-            
-        # Nếu chỉ có warnings và không có severe errors
-        elif warning_errors:
-            print(f"[WARNING] {img.name} thành công nhưng có cảnh báo: {warning_errors}")
-            
-            # Vẫn xuất PNG preview và PDF từ SVG
-            png_preview_path = output_dir / "png_preview" / f"{img_stem}.png"
-            pdf_path = output_dir / "pdf" / f"{img_stem}.pdf"
-            export_svg_to_formats(svg_path, png_preview_path, pdf_path, EXPORT_PNG_PREVIEW, EXPORT_PDF)
-            
-            # Ghi progress
-            write_progress(index, img.name, f"{img_stem}.svg", "done", f"WARNING: {'; '.join(warning_errors)[:100]}")
-            
-        # Nếu hoàn toàn không có lỗi
-        else:
-            print(f"[OK] {img.name} hoàn thành xuất sắc!")
-            
-            # Xuất PNG preview và PDF từ SVG
-            png_preview_path = output_dir / "png_preview" / f"{img_stem}.png"
-            pdf_path = output_dir / "pdf" / f"{img_stem}.pdf"
-            export_svg_to_formats(svg_path, png_preview_path, pdf_path, EXPORT_PNG_PREVIEW, EXPORT_PDF)
-            
-            # Ghi progress
-            write_progress(index, img.name, f"{img_stem}.svg", "done", "OK (SVG JSON)")
+    if os.path.exists(save_path) and os.path.getsize(save_path) > 10000:
+        print("✓ DONE")
+        write_progress(index, img.name, save_name, "done", "OK")
+    else:
+        raise Exception("File tải lỗi hoặc quá nhỏ")
 
 
 def main():
@@ -2183,14 +1648,6 @@ def main():
     print(f"🚀 Mỗi lần xử lý: {BATCH_SIZE} ảnh")
     print(f"📌 Batch lần này: {len(batch)} ảnh")
     print(f"🔁 Chế độ chạy: {RUN_MODE}")
-    print(f"📤 Chế độ đầu ra (OUTPUT_MODE): {OUTPUT_MODE}")
-    print(f"🖼 Xuất PNG Preview (EXPORT_PNG_PREVIEW): {EXPORT_PNG_PREVIEW}")
-    print(f"📄 Xuất PDF (EXPORT_PDF): {EXPORT_PDF}")
-    print(f"📝 Prompt chép lại: {PROMPT_CHEP_LAI}")
-    print(f"📝 Prompt dịch: {PROMPT_DICH}")
-    print(f"📝 Instruction tạo SVG: {PROMPT_SVG_INSTRUCTION}")
-    print(f"📝 Prompt tạo ảnh: {PROMPT_TAO_ANH}")
-    print(f"📝 Prompt JSON Layout: {PROMPT_SVG_JSON_LAYOUT}")
 
     if START_FROM:
         print(f"▶ Bắt đầu từ: {START_FROM}")
@@ -2207,9 +1664,7 @@ def main():
                 headless=False,
                 accept_downloads=True,
                 args=[
-                    "--disable-blink-features=AutomationControlled",
-                    "--disable-dev-shm-usage",
-                    "--no-sandbox"
+                    "--disable-blink-features=AutomationControlled"
                 ],
                 viewport={"width": 1400, "height": 900}
             )
@@ -2222,19 +1677,13 @@ def main():
             for img in batch:
                 try:
                     index = images.index(img) + 1
-                    if OUTPUT_MODE == "svg_json":
-                        save_name = img.stem + ".svg"
-                    else:
-                        save_name = get_output_name(img)
+                    save_name = get_output_name(img)
                     process_one(page, images, img)
 
                 except Exception as e:
                     index = getattr(img, '_batch_index', 0) or (images.index(img) + 1 if img in images else 0)
                     try:
-                        if OUTPUT_MODE == "svg_json":
-                            save_name = img.stem + ".svg"
-                        else:
-                            save_name = get_output_name(img)
+                        save_name = get_output_name(img)
                     except Exception:
                         save_name = img.stem + "_VN.png"
                     print(f"✗ Lỗi: {e}")

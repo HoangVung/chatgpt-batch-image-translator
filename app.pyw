@@ -33,48 +33,9 @@ DEFAULT_SETTINGS = {
     "profile_dir": str(APP_DIR / "chatgpt_auto_profile"),
     "batch_size": "5",
     "start_from": "",
-    "prompt_chep_lai": "chép lại nguyên văn",
-    "prompt_dich": "dịch bản chép lại",
-    "prompt_tao_anh": "tạo ảnh với bản dịch",
-    "prompt_svg_instruction": "Trong cuộc chat này, khi tôi yêu cầu tạo ảnh/SVG với bản dịch: hãy tạo file SVG theo bố cục ảnh gốc, tự kiểm tra và sửa chữ chồng chữ/tràn khung trước khi gửi, câu dài phải xuống dòng và giữ giãn dòng hợp lý. Chỉ gửi link tải SVG cuối cùng.",
-    "prompt_svg_json_layout": """Dựa trên ảnh gốc và bản dịch tiếng Việt ở trên, hãy xuất JSON_LAYOUT để app local dựng SVG.
-
-Yêu cầu bắt buộc:
-- Không tạo ảnh.
-- Không viết SVG.
-- Chỉ xuất một khối JSON hợp lệ, không giải thích thêm.
-- Giữ đủ 100% nội dung bản dịch.
-- Không bỏ tiêu đề, đoạn văn, bảng, số liệu, mũi tên, chú thích.
-- Chia trang thành các block: title, paragraph, table, arrow, figure, caption, formula.
-- Mỗi block phải có x, y, width, height theo hệ tọa độ trang.
-- Page size mặc định: width = 2480, height = 3508.
-- Với paragraph: chia sẵn thành nhiều dòng ngắn, mỗi dòng không quá 42 ký tự tiếng Việt.
-- Với table: xuất rõ số dòng, số cột, nội dung từng ô, căn trái/phải/giữa.
-- Với số tiền: giữ nguyên định dạng số, dấu phẩy, dấu ngoặc, và căn phải.
-- Với mũi tên: xuất x1, y1, x2, y2, direction, label nếu có.
-- Với công thức: giữ nguyên ký hiệu toán học/kế toán.
-- Không dùng foreignObject.
-- Nếu không chắc tọa độ tuyệt đối, hãy ước lượng theo tỷ lệ gần nhất với ảnh gốc.
-
-Schema bắt buộc:
-{
-  "page": {
-    "width": 2480,
-    "height": 3508,
-    "background": "#ffffff"
-  },
-  "meta": {
-    "sourceFile": "",
-    "language": "vi",
-    "layoutType": "accounting_page"
-  },
-  "blocks": []
-}""",
     "theme": "system",
     "language": "vi",
-    "output_mode": "image",
-    "export_png_preview": "True",
-    "export_pdf": "False"
+    "service": "chatgpt"
 }
 
 LANGUAGE_OPTIONS = {
@@ -114,16 +75,13 @@ TEXT = {
         "dashboard": "Bảng điều khiển",
         "dashboard_desc": "Chạy batch ổn định, theo dõi tiến trình và can thiệp thủ công khi ChatGPT yêu cầu.",
         "data_config": "Cấu hình nguồn dữ liệu",
-        "data_hint": "Giữ profile ChatGPT riêng để hạn chế đăng nhập lại và không đưa thư mục này lên GitHub.",
-        "prompt_config": "Cấu hình Prompt",
-        "prompt_hint": "Các câu lệnh gửi tới ChatGPT cho từng bước dịch thuật.",
-        "prompt_chep_lai": "1. Prompt chép lại",
-        "prompt_dich": "2. Prompt dịch",
-        "prompt_svg_instruction": "Nền: Instruction tạo SVG",
-        "prompt_tao_anh": "3. Prompt tạo ảnh",
+        "data_hint": "Giữ profile trình duyệt riêng để hạn chế đăng nhập lại và không đưa thư mục này lên GitHub.",
         "source_folder": "Thư mục ảnh gốc",
         "output_folder": "Thư mục lưu ảnh VN",
-        "profile": "Profile ChatGPT",
+        "profile": "Profile trình duyệt",
+        "service": "Dịch vụ",
+        "service_chatgpt": "ChatGPT",
+        "service_gemini": "Google Gemini",
         "batch_size": "Số ảnh mỗi lần",
         "start_from": "Bắt đầu từ ảnh",
         "start_hint": "Ví dụ: 66, 122, 66_122 hoặc 66_122.jpg",
@@ -159,11 +117,7 @@ TEXT = {
         "exported_failed": "Đã xuất {count} dòng lỗi.",
         "copy_retry_log": "=== Copy lỗi retry ===\nĐã copy: {count}\nThư mục: {path}",
         "missing_count": "Không tìm thấy: {count} file",
-        "copied_failed": "Đã copy {count} ảnh lỗi sang:\n{path}",
-        "output_mode": "Chế độ đầu ra",
-        "export_png_preview": "Xuất ảnh PNG preview (SVG JSON Mode)",
-        "export_pdf": "Xuất file PDF (SVG JSON Mode)",
-        "prompt_svg_json_layout": "4. Prompt JSON Bố cục"
+        "copied_failed": "Đã copy {count} ảnh lỗi sang:\n{path}"
     },
     "en": {
         "language": "Language",
@@ -183,16 +137,13 @@ TEXT = {
         "dashboard": "Dashboard",
         "dashboard_desc": "Run stable batches, monitor progress, and step in manually when ChatGPT asks.",
         "data_config": "Data source settings",
-        "data_hint": "Keep a separate ChatGPT profile to reduce sign-ins, and do not commit this folder to GitHub.",
-        "prompt_config": "Prompt configuration",
-        "prompt_hint": "Commands sent to ChatGPT for each translation step.",
-        "prompt_chep_lai": "1. Transcript prompt",
-        "prompt_dich": "2. Translation prompt",
-        "prompt_svg_instruction": "Base: SVG Instruction",
-        "prompt_tao_anh": "3. Image prompt",
+        "data_hint": "Keep a separate browser profile to reduce sign-ins, and do not commit this folder to GitHub.",
         "source_folder": "Source image folder",
         "output_folder": "VN output folder",
-        "profile": "ChatGPT profile",
+        "profile": "Browser profile",
+        "service": "Service",
+        "service_chatgpt": "ChatGPT",
+        "service_gemini": "Google Gemini",
         "batch_size": "Images per batch",
         "start_from": "Start from image",
         "start_hint": "Examples: 66, 122, 66_122, or 66_122.jpg",
@@ -228,11 +179,7 @@ TEXT = {
         "exported_failed": "Exported {count} failed rows.",
         "copy_retry_log": "=== Copy failures for retry ===\nCopied: {count}\nFolder: {path}",
         "missing_count": "Missing: {count} files",
-        "copied_failed": "Copied {count} failed images to:\n{path}",
-        "output_mode": "Output Mode",
-        "export_png_preview": "Export PNG preview (SVG JSON Mode)",
-        "export_pdf": "Export PDF (SVG JSON Mode)",
-        "prompt_svg_json_layout": "4. JSON Layout prompt"
+        "copied_failed": "Copied {count} failed images to:\n{path}"
     }
 }
 
@@ -656,12 +603,7 @@ class ChatGPTBatchApp:
         return DEFAULT_SETTINGS.copy()
 
     def save_settings(self):
-        prompt_chep_lai = self.get_text_value("prompt_chep_lai_text", "prompt_chep_lai")
-        prompt_dich = self.get_text_value("prompt_dich_text", "prompt_dich")
-        prompt_svg_instruction = self.get_text_value("prompt_svg_instruction_text", "prompt_svg_instruction")
-        prompt_tao_anh = self.get_text_value("prompt_tao_anh_text", "prompt_tao_anh")
-        prompt_svg_json_layout = self.get_text_value("prompt_svg_json_layout_text", "prompt_svg_json_layout")
-
+        service_map = {"ChatGPT": "chatgpt", "Google Gemini": "gemini", "chatgpt": "chatgpt", "gemini": "gemini"}
         data = {
             **self.settings,
             "image_folder": self.image_var.get(),
@@ -669,28 +611,13 @@ class ChatGPTBatchApp:
             "profile_dir": self.profile_var.get(),
             "batch_size": self.batch_var.get(),
             "start_from": self.start_from_var.get(),
-            "output_mode": self.output_mode_var.get(),
-            "export_png_preview": "True" if self.export_png_var.get() else "False",
-            "export_pdf": "True" if self.export_pdf_var.get() else "False",
-            "prompt_chep_lai": prompt_chep_lai,
-            "prompt_dich": prompt_dich,
-            "prompt_svg_instruction": prompt_svg_instruction,
-            "prompt_tao_anh": prompt_tao_anh,
-            "prompt_svg_json_layout": prompt_svg_json_layout,
             "theme": self.theme_code(),
-            "language": self.language_code()
+            "language": self.language_code(),
+            "service": service_map.get(self.service_var.get(), "chatgpt")
         }
 
         with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
-
-        self.settings = data
-
-    def get_text_value(self, widget_name, setting_key):
-        widget = getattr(self, widget_name, None)
-        if widget is None:
-            return self.settings.get(setting_key, DEFAULT_SETTINGS[setting_key])
-        return widget.get("1.0", "end-1c").strip()
 
     def build_ui(self):
         c = self.colors
@@ -806,28 +733,8 @@ class ChatGPTBatchApp:
         ttk.Button(sidebar, text=self.t("save_config"), command=self.save_and_notify, style="Ghost.TButton").pack(fill="x", pady=2)
         ttk.Button(sidebar, text=self.t("clear_log"), command=self.clear_log, style="Ghost.TButton").pack(fill="x", pady=2)
 
-        # Main container with scrollbar and canvas
-        main_container = ttk.Frame(body, style="Main.TFrame")
-        main_container.pack(side="left", fill="both", expand=True)
-
-        scrollbar = ttk.Scrollbar(main_container, orient="vertical", style="Dark.Vertical.TScrollbar")
-        scrollbar.pack(side="right", fill="y")
-
-        canvas = tk.Canvas(main_container, bg=c["app_bg"], highlightthickness=0, bd=0, yscrollcommand=scrollbar.set)
-        canvas.pack(side="left", fill="both", expand=True)
-        scrollbar.configure(command=canvas.yview)
-
-        main = ttk.Frame(canvas, style="Main.TFrame")
-        canvas_window = canvas.create_window((0, 0), window=main, anchor="nw")
-
-        def on_canvas_configure(event):
-            canvas.itemconfig(canvas_window, width=event.width)
-
-        def on_content_configure(event):
-            canvas.configure(scrollregion=canvas.bbox("all"))
-
-        canvas.bind("<Configure>", on_canvas_configure)
-        main.bind("<Configure>", on_content_configure)
+        main = ttk.Frame(body, style="Main.TFrame")
+        main.pack(side="left", fill="both", expand=True)
 
         header = ttk.Frame(main, style="Main.TFrame")
         header.pack(fill="x", pady=(0, 8))
@@ -844,9 +751,10 @@ class ChatGPTBatchApp:
         self.profile_var = tk.StringVar(value=self.settings["profile_dir"])
         self.batch_var = tk.StringVar(value=self.settings["batch_size"])
         self.start_from_var = tk.StringVar(value=self.settings.get("start_from", ""))
-        self.output_mode_var = tk.StringVar(value=self.settings.get("output_mode", "image"))
-        self.export_png_var = tk.BooleanVar(value=str(self.settings.get("export_png_preview", "True")).lower() == "true")
-        self.export_pdf_var = tk.BooleanVar(value=str(self.settings.get("export_pdf", "False")).lower() == "true")
+        
+        current_service = self.settings.get("service", "chatgpt")
+        display_service = "Google Gemini" if current_service == "gemini" else "ChatGPT"
+        self.service_var = tk.StringVar(value=display_service)
 
         config_card = ttk.Frame(main, style="Card.TFrame", padding=(14, 10))
         config_card.pack(fill="x", pady=(0, 8))
@@ -860,103 +768,51 @@ class ChatGPTBatchApp:
             style="SectionHint.TLabel"
         ).grid(row=1, column=0, columnspan=3, sticky="w", pady=(0, 6))
 
-        self.add_folder_row(config_card, self.t("source_folder"), self.image_var, 2)
-        self.add_folder_row(config_card, self.t("output_folder"), self.output_var, 3)
-        self.add_folder_row(config_card, self.t("profile"), self.profile_var, 4)
+        ttk.Label(config_card, text=self.t("service"), style="Field.TLabel").grid(
+            row=2, column=0, sticky="w", padx=(0, 12), pady=3
+        )
+        self.service_combo = ttk.Combobox(
+            config_card,
+            textvariable=self.service_var,
+            values=["ChatGPT", "Google Gemini"],
+            state="readonly",
+            width=22
+        )
+        self.service_combo.grid(row=2, column=1, sticky="w", pady=3)
+
+        def on_service_change(event=None):
+            val = self.service_var.get()
+            current_profile = self.profile_var.get()
+            if val == "Google Gemini" and "chatgpt_auto_profile" in current_profile:
+                new_profile = current_profile.replace("chatgpt_auto_profile", "gemini_auto_profile")
+                self.profile_var.set(new_profile)
+            elif val == "ChatGPT" and "gemini_auto_profile" in current_profile:
+                new_profile = current_profile.replace("gemini_auto_profile", "chatgpt_auto_profile")
+                self.profile_var.set(new_profile)
+
+        self.service_combo.bind("<<ComboboxSelected>>", on_service_change)
+
+        self.add_folder_row(config_card, self.t("source_folder"), self.image_var, 3)
+        self.add_folder_row(config_card, self.t("output_folder"), self.output_var, 4)
+        self.add_folder_row(config_card, self.t("profile"), self.profile_var, 5)
 
         ttk.Label(config_card, text=self.t("batch_size"), style="Field.TLabel").grid(
-            row=5, column=0, sticky="w", padx=(0, 12), pady=(5, 3)
+            row=6, column=0, sticky="w", padx=(0, 12), pady=(5, 3)
         )
-        ttk.Entry(config_card, textvariable=self.batch_var, width=12).grid(row=5, column=1, sticky="w", pady=(5, 3))
+        ttk.Entry(config_card, textvariable=self.batch_var, width=12).grid(row=6, column=1, sticky="w", pady=(5, 3))
 
         ttk.Label(config_card, text=self.t("start_from"), style="Field.TLabel").grid(
-            row=6, column=0, sticky="w", padx=(0, 12), pady=3
+            row=7, column=0, sticky="w", padx=(0, 12), pady=3
         )
-        ttk.Entry(config_card, textvariable=self.start_from_var, width=24).grid(row=6, column=1, sticky="w", pady=3)
+        ttk.Entry(config_card, textvariable=self.start_from_var, width=24).grid(row=7, column=1, sticky="w", pady=3)
 
         ttk.Label(
             config_card,
             text=self.t("start_hint"),
             style="SectionHint.TLabel"
-        ).grid(row=7, column=1, sticky="w", pady=(0, 3))
-
-        ttk.Label(config_card, text=self.t("output_mode"), style="Field.TLabel").grid(
-            row=8, column=0, sticky="w", padx=(0, 12), pady=3
-        )
-        output_mode_combo = ttk.Combobox(
-            config_card,
-            textvariable=self.output_mode_var,
-            values=["image", "svg_json"],
-            state="readonly",
-            width=22
-        )
-        output_mode_combo.grid(row=8, column=1, sticky="w", pady=3)
-
-        checkbox_frame = ttk.Frame(config_card, style="Card.TFrame")
-        checkbox_frame.grid(row=9, column=1, sticky="w", pady=5)
-        
-        self.style.configure("TCheckbutton", background=c["card_bg"], foreground=c["text"], font=("Segoe UI", 10))
-        
-        ttk.Checkbutton(
-            checkbox_frame,
-            text=self.t("export_png_preview"),
-            variable=self.export_png_var,
-            style="TCheckbutton"
-        ).pack(side="left", padx=(0, 15))
-        
-        ttk.Checkbutton(
-            checkbox_frame,
-            text=self.t("export_pdf"),
-            variable=self.export_pdf_var,
-            style="TCheckbutton"
-        ).pack(side="left")
+        ).grid(row=8, column=1, sticky="w", pady=(0, 3))
 
         config_card.columnconfigure(1, weight=1)
-
-        prompt_card = ttk.Frame(main, style="Card.TFrame", padding=(14, 10))
-        prompt_card.pack(fill="x", pady=(0, 8))
-
-        ttk.Label(prompt_card, text=self.t("prompt_config"), style="SectionTitle.TLabel").grid(
-            row=0, column=0, columnspan=2, sticky="w", pady=(0, 2)
-        )
-        ttk.Label(
-            prompt_card,
-            text=self.t("prompt_hint"),
-            style="SectionHint.TLabel"
-        ).grid(row=1, column=0, columnspan=2, sticky="w", pady=(0, 6))
-
-        self.prompt_chep_lai_text = self.add_prompt_row(
-            prompt_card,
-            self.t("prompt_chep_lai"),
-            self.settings.get("prompt_chep_lai", DEFAULT_SETTINGS["prompt_chep_lai"]),
-            2
-        )
-        self.prompt_dich_text = self.add_prompt_row(
-            prompt_card,
-            self.t("prompt_dich"),
-            self.settings.get("prompt_dich", DEFAULT_SETTINGS["prompt_dich"]),
-            3
-        )
-        self.prompt_svg_instruction_text = self.add_prompt_row(
-            prompt_card,
-            self.t("prompt_svg_instruction"),
-            self.settings.get("prompt_svg_instruction", DEFAULT_SETTINGS["prompt_svg_instruction"]),
-            4
-        )
-        self.prompt_tao_anh_text = self.add_prompt_row(
-            prompt_card,
-            self.t("prompt_tao_anh"),
-            self.settings.get("prompt_tao_anh", DEFAULT_SETTINGS["prompt_tao_anh"]),
-            5
-        )
-        self.prompt_svg_json_layout_text = self.add_prompt_row(
-            prompt_card,
-            self.t("prompt_svg_json_layout"),
-            self.settings.get("prompt_svg_json_layout", DEFAULT_SETTINGS["prompt_svg_json_layout"]),
-            6
-        )
-
-        prompt_card.columnconfigure(1, weight=1)
 
         action_card = ttk.Frame(main, style="Toolbar.TFrame", padding=(14, 8))
         action_card.pack(fill="x", pady=(0, 8))
@@ -1051,17 +907,6 @@ class ChatGPTBatchApp:
             self.retry_btn.config(state="disabled")
             self.force_btn.config(state="disabled")
 
-        def on_mouse_wheel(event):
-            canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
-
-        def bind_wheel(widget):
-            if not isinstance(widget, (tk.Text, ttk.Scrollbar, tk.Scrollbar)) and widget != self.log_scroll_canvas:
-                widget.bind("<MouseWheel>", on_mouse_wheel)
-            for child in widget.winfo_children():
-                bind_wheel(child)
-
-        bind_wheel(main_container)
-
     def update_log_scrollbar(self, first, last):
         if not hasattr(self, "log_scroll_canvas"):
             return
@@ -1139,30 +984,6 @@ class ChatGPTBatchApp:
         if folder:
             var.set(folder)
 
-    def add_prompt_row(self, parent, label, value, row):
-        c = self.colors
-        ttk.Label(parent, text=label, style="Field.TLabel").grid(
-            row=row, column=0, sticky="nw", padx=(0, 12), pady=5
-        )
-        text = tk.Text(
-            parent,
-            wrap="word",
-            height=3,
-            font=("Segoe UI", 10),
-            bg=c["input_bg"],
-            fg=c["text"],
-            insertbackground=c["text"],
-            selectbackground=c["selection"],
-            selectforeground=c["text"],
-            relief="solid",
-            borderwidth=1,
-            padx=8,
-            pady=7
-        )
-        text.insert("1.0", value)
-        text.grid(row=row, column=1, sticky="ew", pady=5)
-        return text
-
     def save_and_notify(self):
         self.save_settings()
         messagebox.showinfo("OK", self.t("saved_config"))
@@ -1183,6 +1004,16 @@ class ChatGPTBatchApp:
             messagebox.showerror(self.t("error_title"), self.t("file_missing", path=SCRIPT_FILE))
             return
 
+        service_map = {"ChatGPT": "chatgpt", "Google Gemini": "gemini", "chatgpt": "chatgpt", "gemini": "gemini"}
+        service_val = service_map.get(self.service_var.get(), "chatgpt")
+        profile_dir = self.profile_var.get().strip()
+        if not profile_dir:
+            if service_val == "gemini":
+                profile_dir = str(APP_DIR / "gemini_auto_profile")
+            else:
+                profile_dir = str(APP_DIR / "chatgpt_auto_profile")
+            self.profile_var.set(profile_dir)
+
         self.save_settings()
 
         env = os.environ.copy()
@@ -1192,14 +1023,7 @@ class ChatGPTBatchApp:
         env["BATCH_SIZE"] = self.batch_var.get()
         env["START_FROM"] = self.start_from_var.get()
         env["RUN_MODE"] = mode
-        env["OUTPUT_MODE"] = self.settings.get("output_mode", "image")
-        env["EXPORT_PNG_PREVIEW"] = str(self.settings.get("export_png_preview", "True"))
-        env["EXPORT_PDF"] = str(self.settings.get("export_pdf", "False"))
-        env["PROMPT_CHEP_LAI"] = self.get_text_value("prompt_chep_lai_text", "prompt_chep_lai")
-        env["PROMPT_DICH"] = self.get_text_value("prompt_dich_text", "prompt_dich")
-        env["PROMPT_SVG_INSTRUCTION"] = self.get_text_value("prompt_svg_instruction_text", "prompt_svg_instruction")
-        env["PROMPT_TAO_ANH"] = self.get_text_value("prompt_tao_anh_text", "prompt_tao_anh")
-        env["PROMPT_SVG_JSON_LAYOUT"] = self.get_text_value("prompt_svg_json_layout_text", "prompt_svg_json_layout")
+        env["SERVICE"] = service_val
         env["PYTHONIOENCODING"] = "utf-8"
         env["PYTHONUTF8"] = "1"
         env["PYTHONUNBUFFERED"] = "1"
