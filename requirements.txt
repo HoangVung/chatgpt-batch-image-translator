@@ -1,4 +1,6 @@
 playwright
-pygetwindow
-pywin32
+Pillow>=10
 pyinstaller
+customtkinter>=5.2,<6
+pygetwindow; sys_platform == "win32"
+pywin32; sys_platform == "win32"

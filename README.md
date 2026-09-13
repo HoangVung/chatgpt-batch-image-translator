@@ -14,6 +14,7 @@
 - Chạy theo batch, lưu tiến trình vào `progress.csv`.
 - Tiếp tục từ ảnh bất kỳ bằng ô `Bắt đầu từ ảnh`.
 - Chạy lại ảnh lỗi hoặc chạy lại một ảnh được chỉ định.
+- Khi chạy lại một ảnh, app chỉ xử lý đúng ảnh được chỉ định; nếu tên không khớp hoặc mơ hồ, app sẽ dừng an toàn.
 - Tự động mở ChatGPT bằng Playwright Chromium với profile riêng.
 - Hỗ trợ theme Sáng, Tối và Hệ thống.
 - Hỗ trợ build portable trên Windows và `.app` trên macOS.
@@ -30,6 +31,9 @@ Với mỗi ảnh, app sẽ:
 6. Đợi bản dịch.
 7. Gửi prompt `Tạo ảnh với bản dịch`.
 8. Tải ảnh kết quả về thư mục output.
+
+Tên đầu ra bao gồm cả hai số của file nguồn để không ghi đè giữa các ảnh. Ví dụ: `73_129.jpg` được lưu là `00073_00129VN.png`.
+Kết quả theo tên cũ như `00073VN.png` chỉ được tiếp tục nhận diện khi thư mục nguồn có đúng một ảnh của trang đó; các trang có nhiều ảnh sẽ được xử lý lại để tạo tên mới, tránh nhầm kết quả cũ.
 
 ## Yêu cầu
 
@@ -53,6 +57,22 @@ py -3 -m pip install -r requirements.txt
 py -3 -m playwright install chromium
 py -3 app.pyw
 ```
+
+## Khi ảnh đã hiện nhưng app vẫn chờ hoặc chưa lưu
+
+- Nếu log còn ở `Chờ ảnh mới` và chưa có `Tải ảnh vào`, app chưa nhận diện được ảnh kết quả. Bộ nhận diện hỗ trợ cả khung tạo ảnh nằm ngoài phần văn bản trả lời; dòng `Nhận diện ảnh` giúp kiểm tra khi giao diện thay đổi.
+- App kiểm tra quyền ghi thư mục VN trước khi mở trình duyệt. Khi tải trực tiếp thất bại, app thử tải bằng phiên đăng nhập, rồi đọc ảnh đã tải trên trang ở độ phân giải gốc. File được kiểm tra và chuyển sang PNG trước khi ghi; log `Đã lưu ảnh` ghi đường dẫn thực tế.
+- Nút `Xuất log` lưu nhật ký hiện tại vào `process_log.txt` trong thư mục output; nút `Copy log` chép toàn bộ nhật ký vào clipboard.
+- Khi retry, nếu tên file trong `progress.csv` không tồn tại tại thư mục ảnh gốc đang chọn, `failed_retry/missing_files.txt` liệt kê các tên cũ bị thiếu. Nếu đã đổi tên hoặc di chuyển ảnh, chọn lại thư mục nguồn và chạy chính với tên file hiện tại.
+- Để kiểm tra một ảnh sau khi cập nhật: mở lại app, chọn đúng hai thư mục, nhập tên đầy đủ như `26_039.jpg` vào `Bắt đầu từ ảnh`, rồi bấm chạy lại một ảnh. Bản `.exe` cần được build lại để nhận thay đổi mã nguồn.
+
+Chạy kiểm thử (có dùng Chromium để kiểm tra nhận diện và tải ảnh trên trang mô phỏng, không đăng nhập ChatGPT):
+
+```powershell
+python -m unittest discover -s tests -v
+```
+
+Có thể đặt biến môi trường `BATCH_TEST_BROWSER` tới đường dẫn Chrome/Chromium đã cài nếu không dùng Chromium của Playwright.
 
 ## Build Windows portable
 
@@ -89,6 +109,12 @@ Hoặc double-click:
 
 ```text
 build_macos.command
+```
+
+Khi clone source trên macOS, chạy một lần trước khi double-click:
+
+```bash
+chmod +x build_macos.command
 ```
 
 Sau khi build, app nằm tại:
@@ -153,6 +179,7 @@ Desktop app for batch-processing book/comic images with ChatGPT: upload an image
 - Run images in batches and track progress in `progress.csv`.
 - Continue from a specific image via the `Start from image` field.
 - Retry failed images or force rerun a selected image.
+- A forced rerun processes exactly the selected image and stops safely when the name is missing or ambiguous.
 - Automatically opens ChatGPT through Playwright Chromium with a dedicated browser profile.
 - Supports Light, Dark, and System themes.
 - Supports Windows portable builds and macOS `.app` builds.
@@ -169,6 +196,9 @@ For each image, the app will:
 6. Wait for the translation.
 7. Send the prompt `Tạo ảnh với bản dịch`.
 8. Download the generated image to the output folder.
+
+Output names include both source numbers to avoid collisions. For example, `73_129.jpg` is saved as `00073_00129VN.png`.
+Legacy output names such as `00073VN.png` are reused only when the input has exactly one image for that page; pages with multiple images are processed again under their unique names to avoid treating an ambiguous legacy result as complete.
 
 ## Requirements
 
@@ -228,6 +258,12 @@ Or double-click:
 
 ```text
 build_macos.command
+```
+
+When building from a source clone on macOS, run this once before double-clicking:
+
+```bash
+chmod +x build_macos.command
 ```
 
 The built app will be in:

@@ -24,6 +24,8 @@ Nen gui ca thu muc `ChatGPT Batch Translator` cho nguoi dung, khong chi gui rien
 4. Bam `Chay batch moi`.
 5. Lan dau app se mo browser de dang nhap ChatGPT.
 
+Neu bam `Chay lai anh nay`, hay nhap dung ten file trong o `Bat dau tu anh`; app chi chay mot anh va se dung neu khong tim thay file.
+
 ## Khong dong goi cac thu muc nay cua may ban
 
 - `chatgpt_auto_profile`

@@ -1,7 +1,7 @@
 import os
-import csv
 import shutil
 from pathlib import Path
+from progress_utils import latest_failed_rows
 
 IMAGE_FOLDER = os.getenv("IMAGE_FOLDER", r"D:\images")
 DOWNLOAD_FOLDER = os.getenv("DOWNLOAD_FOLDER", r"D:\images_vn")
@@ -17,19 +17,11 @@ def main():
 
     os.makedirs(RETRY_FOLDER, exist_ok=True)
 
-    failed_files = []
-
-    with open(PROGRESS_FILE, "r", encoding="utf-8-sig", newline="") as f:
-        reader = csv.DictReader(f)
-
-        for row in reader:
-            status = (row.get("status") or "").strip().lower()
-            file_name = (row.get("file") or "").strip()
-
-            if status in ["fail", "failed", "manual", "error"] and file_name:
-                failed_files.append(file_name)
-
-    failed_files = sorted(set(failed_files))
+    failed_files = sorted(
+        (row.get("file") or "").strip()
+        for row in latest_failed_rows(PROGRESS_FILE)
+        if (row.get("file") or "").strip()
+    )
 
     if not failed_files:
         print("Không có ảnh lỗi để copy.")

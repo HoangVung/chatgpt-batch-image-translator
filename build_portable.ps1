@@ -96,12 +96,18 @@ if (-not $PythonExe) {
 
 function Invoke-Python {
     & $PythonExe @PythonPrefix @args
+    if ($LASTEXITCODE -ne 0) {
+        throw "Python command failed with exit code $LASTEXITCODE."
+    }
 }
 
 Write-Host "==> Using Python:"
 Write-Host $PythonExe
 
-$PythonRoot = Split-Path -Parent $PythonExe
+$PythonRoot = (& $PythonExe @PythonPrefix -c "import sys; print(sys.prefix)").Trim()
+if ($LASTEXITCODE -ne 0 -or -not $PythonRoot) {
+    throw "Could not determine the selected Python installation directory."
+}
 $TclLibrary = Join-Path $PythonRoot "tcl\tcl8.6"
 $TkLibrary = Join-Path $PythonRoot "tcl\tk8.6"
 if ((Test-Path $TclLibrary) -and (Test-Path $TkLibrary)) {
@@ -136,14 +142,31 @@ Invoke-Python -m PyInstaller `
     --noupx `
     --name "$AppName" `
     --collect-all playwright `
+    --hidden-import sqlite3 `
+    --collect-binaries sqlite3 `
     --hidden-import run_chatgpt_batch `
     --hidden-import pygetwindow `
     --hidden-import win32process `
     app.pyw
 
+Write-Host "==> Ensuring SQLite runtime is present..."
+$SqliteDll = Join-Path $PythonRoot "DLLs\sqlite3.dll"
+if (-not (Test-Path -LiteralPath $SqliteDll)) {
+    throw "sqlite3.dll was not found in the selected Python runtime: $SqliteDll"
+}
+Copy-Item -LiteralPath $SqliteDll -Destination $DistApp -Force
+
 Write-Host "==> Installing Playwright Chromium into portable folder..."
 $env:PLAYWRIGHT_BROWSERS_PATH = Join-Path $DistApp "ms-playwright"
 Invoke-Python -m playwright install chromium
+
+if (-not (Test-Path -LiteralPath (Join-Path $DistApp "$AppName.exe"))) {
+    throw "PyInstaller finished without creating $AppName.exe."
+}
+
+if (-not (Get-ChildItem -LiteralPath $env:PLAYWRIGHT_BROWSERS_PATH -Filter chrome.exe -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1)) {
+    throw "Playwright Chromium was not installed into the portable folder."
+}
 
 Write-Host "==> Creating default user folders..."
 New-Item -ItemType Directory -Force -Path (Join-Path $DistApp "images") | Out-Null

@@ -5,9 +5,13 @@ import csv
 import json
 import base64
 import functools
+import tempfile
+from io import BytesIO
 from pathlib import Path
 from datetime import datetime
+from PIL import Image
 from playwright.sync_api import sync_playwright
+from progress_utils import FAILED_STATUSES, read_latest_progress
 
 try:
     import pygetwindow as gw
@@ -26,13 +30,22 @@ except Exception:
 
 
 BASE_DIR = Path(__file__).resolve().parent
-SETTINGS_FILE = BASE_DIR / "app_settings.json"
+
+
+def get_data_dir():
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Application Support" / "ChatGPT Batch Translator"
+    return BASE_DIR
+
+
+DATA_DIR = get_data_dir()
+SETTINGS_FILE = DATA_DIR / "app_settings.json"
 
 DEFAULT_CONFIG = {
-    "image_folder": str(BASE_DIR / "images"),
-    "download_folder": str(BASE_DIR / "images_vn"),
-    "profile_dir": str(BASE_DIR / "chatgpt_auto_profile"),
-    "batch_size": "5",
+    "image_folder": str(DATA_DIR / "images"),
+    "download_folder": str(DATA_DIR / "images_vn"),
+    "profile_dir": str(DATA_DIR / "chatgpt_auto_profile"),
+    "batch_size": "10",
     "start_from": ""
 }
 
@@ -50,16 +63,16 @@ def load_config():
     cfg["image_folder"] = os.getenv("IMAGE_FOLDER", cfg["image_folder"])
     cfg["download_folder"] = os.getenv("DOWNLOAD_FOLDER", cfg["download_folder"])
     cfg["profile_dir"] = os.getenv("PROFILE_DIR", cfg.get("profile_dir", "")).strip()
-    cfg["batch_size"] = int(os.getenv("BATCH_SIZE", cfg.get("batch_size", "5")))
+    cfg["batch_size"] = int(os.getenv("BATCH_SIZE", cfg.get("batch_size", "10")))
     cfg["run_mode"] = os.getenv("RUN_MODE", "main")
     cfg["start_from"] = os.getenv("START_FROM", cfg.get("start_from", "")).strip()
     cfg["service"] = os.getenv("SERVICE", cfg.get("service", "chatgpt")).strip().lower()
 
     if not cfg["profile_dir"]:
         if cfg["service"] == "gemini":
-            cfg["profile_dir"] = str(BASE_DIR / "gemini_auto_profile")
+            cfg["profile_dir"] = str(DATA_DIR / "gemini_auto_profile")
         else:
-            cfg["profile_dir"] = str(BASE_DIR / "chatgpt_auto_profile")
+            cfg["profile_dir"] = str(DATA_DIR / "chatgpt_auto_profile")
 
     return cfg
 
@@ -73,6 +86,7 @@ BATCH_SIZE = CFG["batch_size"]
 RUN_MODE = CFG["run_mode"]
 START_FROM = CFG["start_from"]
 SERVICE = CFG.get("service", "chatgpt")
+BATCH_RESULT_PREFIX = "__BATCH_RESULT__="
 
 WAIT_AFTER_EACH_IMAGE = 30
 MAX_RETRY_IMAGE = 3
@@ -93,8 +107,17 @@ def sleep(s):
 
 
 def ensure_dirs():
-    os.makedirs(IMAGE_FOLDER, exist_ok=True)
-    os.makedirs(DOWNLOAD_FOLDER, exist_ok=True)
+    if not Path(IMAGE_FOLDER).is_dir():
+        raise ValueError(f"Không tìm thấy thư mục ảnh gốc: {IMAGE_FOLDER}. Hãy chọn lại thư mục ảnh gốc.")
+    os.makedirs(DATA_DIR, exist_ok=True)
+    try:
+        os.makedirs(DOWNLOAD_FOLDER, exist_ok=True)
+        # Fail before uploading or generating if the chosen destination is unwritable.
+        with tempfile.TemporaryFile(dir=DOWNLOAD_FOLDER) as probe:
+            probe.write(b"write-check")
+            probe.flush()
+    except OSError as exc:
+        raise OSError(f"Không ghi được vào thư mục ảnh VN: {DOWNLOAD_FOLDER}: {exc}") from exc
     os.makedirs(PROFILE_DIR, exist_ok=True)
 
 
@@ -141,14 +164,14 @@ def get_images():
 
 def get_output_name(img):
     """
-    73_129.jpg -> 00073VN.png
+    73_129.jpg -> 00073_00129VN.png
     """
-    left, _ = parse_source_numbers(img)
+    left, right = parse_source_numbers(img)
 
-    if left == 999999999:
+    if left == 999999999 or right == 999999999:
         raise Exception(f"Tên file nguồn không đúng dạng số_trang_sốthứtự: {img.name}")
 
-    return f"{left:05d}VN.png"
+    return f"{left:05d}_{right:05d}VN.png"
 
 
 def match_start_file(img, start_value):
@@ -176,37 +199,42 @@ def match_start_file(img, start_value):
     return False
 
 
-def apply_start_from(images):
+def find_start_matches(images, start_value):
+    value = start_value.lower().strip()
+    exact = [img for img in images if value in {img.name.lower(), img.stem.lower()}]
+    if exact:
+        return exact
+    return [img for img in images if match_start_file(img, start_value)]
+
+
+def apply_start_from(images, require_single_match=False):
     if not START_FROM:
         return images
 
-    for i, img in enumerate(images):
-        if match_start_file(img, START_FROM):
-            print(f"▶ Bắt đầu từ ảnh: {img.name}")
-            return images[i:]
+    matches = find_start_matches(images, START_FROM)
+    if not matches:
+        raise ValueError(f"Không tìm thấy ảnh bắt đầu: {START_FROM}")
+    if require_single_match and len(matches) != 1:
+        raise ValueError(
+            f"'{START_FROM}' khớp với {len(matches)} ảnh. "
+            "Hãy nhập đầy đủ tên file để chạy lại đúng một ảnh."
+        )
 
-    print(f"⚠ Không tìm thấy ảnh bắt đầu: {START_FROM}")
-    print("→ Sẽ chạy từ ảnh đầu tiên.")
-    return images
+    first_match = matches[0]
+    index = images.index(first_match)
+    print(f"▶ Bắt đầu từ ảnh: {first_match.name}")
+    return images[index:]
 
 
 def read_latest_status():
     init_progress()
-
-    latest = {}
-
-    with open(PROGRESS_FILE, "r", encoding="utf-8-sig", newline="") as f:
-        reader = csv.DictReader(f)
-
-        for row in reader:
-            file_name = row.get("file", "")
-            if file_name:
-                latest[file_name] = {
-                    "status": (row.get("status") or "").strip().lower(),
-                    "note": row.get("note", "")
-                }
-
-    return latest
+    return {
+        file_name: {
+            "status": (row.get("status") or "").strip().lower(),
+            "note": row.get("note", ""),
+        }
+        for file_name, row in read_latest_progress(PROGRESS_FILE).items()
+    }
 
 
 def write_progress(index, file_name, output_name, status, note=""):
@@ -229,9 +257,46 @@ def output_file_exists(img):
         output_name = get_output_name(img)
         output_path = os.path.join(DOWNLOAD_FOLDER, output_name)
 
-        return os.path.exists(output_path) and os.path.getsize(output_path) > 10000
+        return is_valid_image_file(output_path)
     except Exception:
         return False
+
+
+def legacy_output_file_exists(img, images):
+    """Recognize a pre-unique-name output only when it cannot be ambiguous."""
+    try:
+        left, _ = parse_source_numbers(img)
+        if left == 999999999:
+            return False
+        if sum(parse_source_numbers(candidate)[0] == left for candidate in images) != 1:
+            return False
+        legacy_path = os.path.join(DOWNLOAD_FOLDER, f"{left:05d}VN.png")
+        return is_valid_image_file(legacy_path)
+    except Exception:
+        return False
+
+
+def get_job_state(images):
+    """Reconcile source files with valid outputs; CSV status alone is insufficient."""
+    latest = read_latest_status()
+    pending, failed, done = [], [], []
+    for img in images:
+        status = latest.get(img.name, {}).get("status", "")
+        valid = output_file_exists(img)
+        if status == "done" and not valid:
+            valid = legacy_output_file_exists(img, images)
+        if valid:
+            done.append(img)
+        elif status in FAILED_STATUSES:
+            failed.append(img)
+        else:
+            pending.append(img)
+    return {
+        "total": len(images), "done": len(done), "failed": len(failed),
+        "pending": len(pending), "pending_files": pending,
+        "state": "complete" if len(done) == len(images) else
+                 "needs_retry" if not pending else "pending",
+    }
 
 
 def get_next_batch(images):
@@ -241,28 +306,36 @@ def get_next_batch(images):
     if RUN_MODE == "retry":
         for img in images:
             st = latest.get(img.name, {}).get("status", "")
-            if st in ["fail", "failed", "manual", "error"]:
+            if st in FAILED_STATUSES:
                 pending.append(img)
         return pending[:BATCH_SIZE]
 
     if RUN_MODE == "force":
-        return images[:BATCH_SIZE]
+        return images[:1]
 
-    for img in images:
-        st = latest.get(img.name, {}).get("status", "")
+    return get_job_state(images)["pending_files"][:BATCH_SIZE]
 
-        if st == "done":
-            continue
 
-        if output_file_exists(img):
-            continue
+def finish_batch_result(result, images):
+    job = get_job_state(images)
+    result["job"] = {key: value for key, value in job.items() if key != "pending_files"}
+    result["next_pending_count"] = job["pending"]
+    code = 0
+    if result.get("failure_count") or job["state"] == "needs_retry":
+        code = 2
+    elif (result["mode"] == "main" and result["selected_count"] and
+          job["pending"] >= result["pending_before"]):
+        code = 3
+    result["exit_code"] = code
+    print(f"Job: {job['done']}/{job['total']} ảnh hợp lệ; "
+          f"{job['pending']} chờ xử lý; {job['failed']} cần chạy lại; {job['state']}")
+    emit_batch_result(result)
+    return code
 
-        if st == "":
-            pending.append(img)
-        elif st in ["fail", "failed", "manual", "error"]:
-            continue
 
-    return pending[:BATCH_SIZE]
+def emit_batch_result(result):
+    """Send a machine-readable, single-line summary to the desktop app."""
+    print(BATCH_RESULT_PREFIX + json.dumps(result, ensure_ascii=False, sort_keys=True))
 
 
 def minimize_own_browser(context):
@@ -370,16 +443,35 @@ def login_if_needed(page, service=SERVICE):
     page.goto(url, wait_until="domcontentloaded")
     wait_if_cloudflare(page)
 
+    signin_selectors = (
+        [
+            '.sign-in-button',
+            'a:has-text("Sign in")',
+            'button:has-text("Sign in")',
+            'a:has-text("Đăng nhập")',
+            'button:has-text("Đăng nhập")',
+            'a:has-text("Get started")',
+            'button:has-text("Get started")',
+            'a:has-text("Bắt đầu")',
+            'button:has-text("Bắt đầu")',
+        ]
+        if service == "gemini"
+        else [
+            'a:has-text("Log in")',
+            'button:has-text("Log in")',
+            'a:has-text("Đăng nhập")',
+            'button:has-text("Đăng nhập")',
+        ]
+    )
     has_signin = False
-    try:
-        if service == "gemini":
-            signin_text = page.locator("text=Sign in, text=Đăng nhập, text=Get started, text=Bắt đầu, .sign-in-button").count()
-        else:
-            signin_text = page.locator("text=Log in").count()
-        if signin_text > 0:
-            has_signin = True
-    except Exception:
-        pass
+    for selector in signin_selectors:
+        try:
+            locator = page.locator(selector).first
+            if locator.count() > 0 and locator.is_visible():
+                has_signin = True
+                break
+        except Exception:
+            continue
 
     if wait_page_ready(page, 90) and not has_signin:
         print(f"✅ Đã vào được {service.upper()}.")
@@ -392,6 +484,8 @@ def login_if_needed(page, service=SERVICE):
     input("Chờ app gửi ENTER sau khi login xong... ")
 
     wait_if_cloudflare(page)
+    if not wait_page_ready(page, 90):
+        raise Exception(f"{service.upper()} chưa sẵn sàng sau khi đăng nhập.")
 
 
 def reset_chat(page, service=SERVICE):
@@ -534,26 +628,33 @@ def wait_upload_attached(page, timeout=90):
                                    document.querySelector('div[contenteditable="true"]');
                     if (!prompt) return false;
 
+                    const roots = [];
+                    const addRoot = (root) => {
+                        if (root && !roots.includes(root)) roots.push(root);
+                    };
                     let root = prompt.closest('form') || prompt.closest('.input-area-container') || prompt.parentElement;
-                    if (!root) {
-                        root = prompt;
-                        for (let i = 0; i < 6 && root.parentElement; i++) {
-                            root = root.parentElement;
-                            if (root.querySelectorAll('img').length > 0) break;
+                    addRoot(root);
+
+                    for (let i = 0; i < 6 && root && root.parentElement; i++) {
+                        root = root.parentElement;
+                        const descriptor = [root.className, root.getAttribute('data-testid'), root.getAttribute('role')]
+                            .filter(Boolean)
+                            .join(' ')
+                            .toLowerCase();
+                        if (/(composer|input|prompt|upload|rich-textarea)/.test(descriptor)) {
+                            addRoot(root);
                         }
                     }
 
-                    const imgs = Array.from(root.querySelectorAll('img'));
-                    const hasRealImage = imgs.some(img => {
+                    return roots.some((candidateRoot) => Array.from(candidateRoot.querySelectorAll('img')).some(img => {
                         const src = img.getAttribute('src') || '';
                         const box = img.getBoundingClientRect();
                         const low = src.toLowerCase();
                         return box.width > 40 && box.height > 40 &&
-                               !low.includes('avatar') &&
-                               !low.includes('emoji') &&
-                               !src.startsWith('data:image/svg');
-                    });
-                    return hasRealImage;
+                            !low.includes('avatar') &&
+                            !low.includes('emoji') &&
+                            !src.startsWith('data:image/svg');
+                    }));
                 }
             """)
             if ok:
@@ -584,11 +685,16 @@ def wait_prompt_ready(page, timeout=120):
 
                     const rect = el.getBoundingClientRect();
                     const style = window.getComputedStyle(el);
-                    const stopBtn = document.querySelector('button[data-testid="stop-button"]') ||
-                                    document.querySelector('button[aria-label*="Stop" i]') ||
-                                    document.querySelector('button[aria-label*="Cancel" i]') ||
-                                    document.querySelector('button[aria-label*="Dừng" i]') ||
-                                    document.querySelector('button[aria-label*="Hủy" i]');
+                    const stopVisible = Array.from(document.querySelectorAll(
+                        'button[data-testid="stop-button"], button[aria-label*="Stop" i], ' +
+                        'button[aria-label*="Cancel" i], button[aria-label*="Dừng" i], ' +
+                        'button[aria-label*="Hủy" i]'
+                    )).some((button) => {
+                        const buttonRect = button.getBoundingClientRect();
+                        const buttonStyle = window.getComputedStyle(button);
+                        return buttonRect.width > 0 && buttonRect.height > 0 &&
+                            buttonStyle.visibility !== 'hidden' && buttonStyle.display !== 'none';
+                    });
 
                     const disabled =
                         el.getAttribute('aria-disabled') === 'true' ||
@@ -600,7 +706,7 @@ def wait_prompt_ready(page, timeout=120):
                     return (
                         rect.width > 0 &&
                         rect.height > 0 &&
-                        !stopBtn &&
+                        !stopVisible &&
                         !disabled
                     );
                 }
@@ -1019,14 +1125,30 @@ def get_assistant_response_signature(page):
     try:
         return page.evaluate("""
             () => {
-                let nodes = Array.from(document.querySelectorAll('[data-message-author-role="assistant"], message-content, .message-content'));
+                const isUserNode = (node) => Boolean(node.closest(
+                    '[data-message-author-role="user"], [data-testid*="user" i], ' +
+                    'user-query, .user-query, .user-message'
+                ));
+                let nodes = Array.from(document.querySelectorAll(
+                    '[data-message-author-role="assistant"], [data-testid*="assistant" i], ' +
+                    'message-content, .message-content, .model-response-text'
+                )).filter((node) => !isUserNode(node));
 
                 if (nodes.length === 0) {
                     nodes = Array.from(document.querySelectorAll('.markdown, .message-content')).filter((node) => {
                         const text = (node.innerText || node.textContent || '').trim();
-                        return text.length > 0 && !node.closest('#prompt-textarea') && !node.closest('.input-area-container') && !node.closest('rich-textarea');
+                        return text.length > 0 && !isUserNode(node) &&
+                            !node.closest('#prompt-textarea') &&
+                            !node.closest('.input-area-container') &&
+                            !node.closest('rich-textarea');
                     });
                 }
+
+                // A response wrapper and its message-content child can both match.
+                // Keep the deepest matching node so one response is counted once.
+                nodes = nodes.filter((node) => !nodes.some(
+                    (other) => other !== node && node.contains(other)
+                ));
 
                 const texts = nodes
                     .map((node) => (node.innerText || node.textContent || '').trim())
@@ -1147,46 +1269,25 @@ def wait_response_after_send(page, timeout_start=90, timeout_done=900, resend_te
                         break
                     sleep(1)
 
-        if not started:
-            print("⚠ Vẫn chưa thấy dấu hiệu bắt đầu, chờ thêm 10 giây...")
-            sleep(10)
+    if not started:
+        print("⚠ Không nhận được phản hồi mới; không coi bước này là thành công.")
+        return False
 
     print("⏳ Chờ ChatGPT xử lý xong...")
+    if not before_signature:
+        print("⚠ Không có mốc phản hồi trước khi gửi prompt.")
+        return False
 
-    start = time.time()
-    last_log = 0
-
-    while time.time() - start < timeout_done:
-        wait_if_cloudflare(page)
-
-        if before_signature and has_new_assistant_response(page, before_signature):
-            print("  ✓ Phát hiện phản hồi mới, chờ ổn định...")
-            return wait_assistant_response_stable(
-                page,
-                before_signature,
-                stable_seconds=6,
-                timeout=max(30, int(timeout_done - (time.time() - start)))
-            )
-
-        if not is_generating(page):
-            sleep(5)
-            if not is_generating(page):
-                print("  ✓ ChatGPT đã dừng xử lý")
-                return True
-
-        elapsed = int(time.time() - start)
-        if time.time() - last_log >= 30:
-            gen = is_generating(page)
-            has_new = has_new_assistant_response(page, before_signature) if before_signature else False
-            print(f"  ⏳ Đang chờ... {elapsed}s | generating={gen} | new_response={has_new}")
-            last_log = time.time()
-
-        sleep(2)
-
-    return False
+    return wait_assistant_response_stable(
+        page,
+        before_signature,
+        stable_seconds=6,
+        timeout=timeout_done,
+    )
 
 
-def get_all_image_srcs(page):
+def get_image_snapshot(page):
+    """Inspect image results, including tool cards outside the assistant text node."""
     try:
         return page.evaluate("""
             () => {
@@ -1197,42 +1298,89 @@ def get_all_image_srcs(page):
                 const composer = prompt ? (prompt.closest('form') || prompt.closest('.input-area-container') || prompt.parentElement) : null;
                 const seen = new Set();
                 const result = [];
+                const ignored = {};
+                const skip = (reason) => { ignored[reason] = (ignored[reason] || 0) + 1; };
+                const userSelector = '[data-message-author-role="user"], [data-turn="user"], ' +
+                    '[data-testid*="user" i], user-query, .user-query, .user-message';
+                const assistantSelector = '[data-message-author-role="assistant"], [data-turn="assistant"], ' +
+                    '[data-testid*="assistant" i], model-response, message-content, ' +
+                    '.message-content, .model-response-text';
 
                 for (const img of Array.from(document.querySelectorAll('img'))) {
-                    if (composer && composer.contains(img)) continue;
+                    if (composer && composer.contains(img)) { skip('composer'); continue; }
+                    if (img.closest(userSelector)) { skip('user'); continue; }
+
+                    // ChatGPT can render the image tool as a sibling of the assistant
+                    // message. Scope the fallback to its conversation turn, never the
+                    // whole page (which also contains uploads, avatars and history).
+                    const turn = img.closest('[data-testid^="conversation-turn-"]');
+                    if (turn && turn.querySelector(userSelector)) { skip('user'); continue; }
+                    const message = img.closest(assistantSelector) || turn;
+                    if (!message) { skip('outside_response'); continue; }
 
                     const src = img.currentSrc || img.getAttribute('src') || '';
                     if (!src) continue;
 
                     const low = src.toLowerCase();
                     const alt = (img.getAttribute('alt') || '').toLowerCase();
-                    if (low.includes('avatar') || low.includes('emoji') || alt.includes('avatar')) continue;
-                    if (src.startsWith('data:image/svg')) continue;
+                    if (low.includes('avatar') || low.includes('emoji') || alt.includes('avatar')) { skip('icon'); continue; }
+                    if (src.startsWith('data:image/svg')) { skip('icon'); continue; }
 
                     const box = img.getBoundingClientRect();
                     const naturalWidth = img.naturalWidth || 0;
                     const naturalHeight = img.naturalHeight || 0;
-                    const visible = box.width >= 80 && box.height >= 80;
-                    const realSize = naturalWidth >= 80 && naturalHeight >= 80;
+                    const style = window.getComputedStyle(img);
+                    const visible = box.width >= 80 && box.height >= 80 &&
+                        style.visibility !== 'hidden' && style.display !== 'none';
+                    const fullyLoaded = img.complete && naturalWidth >= 80 && naturalHeight >= 80;
 
-                    if (!visible && !realSize) continue;
                     if (seen.has(src)) continue;
 
                     seen.add(src);
-                    result.push(src);
+                    result.push({src, ready: visible && fullyLoaded});
+                    if (!visible || !fullyLoaded) skip('not_ready');
                 }
 
-                return result;
+                return {images: result, ignored};
             }
         """)
-    except Exception:
-        return []
+    except Exception as exc:
+        return {"images": [], "ignored": {}, "error": str(exc).splitlines()[0]}
+
+
+def get_all_image_srcs(page, include_pending=False):
+    return [
+        image["src"] for image in get_image_snapshot(page)["images"]
+        if include_pending or image["ready"]
+    ]
+
+
+def log_image_detection(page):
+    snapshot = get_image_snapshot(page)
+    ready = sum(image["ready"] for image in snapshot["images"])
+    print(f"  ↳ Nhận diện ảnh: {ready} đã tải xong / {len(snapshot['images'])} trong phản hồi; "
+          f"bỏ qua: {snapshot['ignored']}")
+    if snapshot.get("error"):
+        print(f"  ↳ Lỗi đọc ảnh trên trang: {snapshot['error']}")
 
 
 def get_latest_new_image(page, old_list):
     current = get_all_image_srcs(page)
     new_imgs = [x for x in current if x not in old_list]
     return new_imgs[-1] if new_imgs else None
+
+
+def find_image_locator(page, expected_src):
+    images = page.locator("img")
+    for index in range(images.count()):
+        candidate = images.nth(index)
+        try:
+            src = candidate.evaluate("img => img.currentSrc || img.getAttribute('src') || ''")
+            if src == expected_src:
+                return candidate
+        except Exception:
+            continue
+    return None
 
 
 def run_dich_step(page):
@@ -1289,14 +1437,27 @@ def wait_image_generation_finished_or_image_ready(page, old_imgs, timeout=IMAGE_
     start = time.time()
     last_log = 0
     first_clear_error_time = None
+    candidate_url = None
+    candidate_idle_since = None
 
     while time.time() - start < timeout:
         wait_if_cloudflare(page)
 
         img_url = get_latest_new_image(page, old_imgs)
-        if img_url:
-            print("✓ Có ảnh mới")
-            return img_url
+        generating = is_generating(page)
+        if img_url != candidate_url:
+            candidate_url = img_url
+            candidate_idle_since = None
+
+        if candidate_url and not generating:
+            if candidate_idle_since is None:
+                candidate_idle_since = time.time()
+                print("✓ Có ảnh mới, chờ xác nhận ảnh hoàn tất...")
+            elif time.time() - candidate_idle_since >= 5:
+                print("✓ Ảnh mới đã ổn định")
+                return candidate_url
+        elif generating:
+            candidate_idle_since = None
 
         elapsed = int(time.time() - start)
 
@@ -1307,10 +1468,9 @@ def wait_image_generation_finished_or_image_ready(page, old_imgs, timeout=IMAGE_
 
             # Có lỗi rõ ràng thì vẫn chờ thêm 90 giây, vì đôi khi ảnh vẫn ra muộn.
             if time.time() - first_clear_error_time >= 90:
-                img_url = get_latest_new_image(page, old_imgs)
-                if img_url:
-                    print("✓ Có ảnh mới")
-                    return img_url
+                if candidate_url and not is_generating(page):
+                    print("✓ Ảnh mới đã hoàn tất sau cảnh báo lỗi")
+                    return candidate_url
                 print("⚠ Lỗi tạo ảnh rõ ràng và không có ảnh sau khi chờ thêm")
                 return None
         else:
@@ -1318,8 +1478,10 @@ def wait_image_generation_finished_or_image_ready(page, old_imgs, timeout=IMAGE_
 
         # Log định kỳ, không kết luận fail khi idle.
         if time.time() - last_log >= 30:
-            state = "đang xử lý" if is_generating(page) else "chưa có tín hiệu xử lý rõ, vẫn tiếp tục chờ"
+            state = "đang xử lý" if generating else "chưa có tín hiệu xử lý rõ, vẫn tiếp tục chờ"
             print(f"  ⏳ Chờ ảnh mới... {elapsed}s | trạng thái: {state}")
+            if not generating and not candidate_url:
+                log_image_detection(page)
             last_log = time.time()
 
         sleep(10)
@@ -1332,7 +1494,7 @@ def try_create_image(page, old_imgs):
     for attempt in range(1, MAX_RETRY_IMAGE + 1):
         print(f"→ Tạo ảnh lần {attempt}")
 
-        before_send_imgs = get_all_image_srcs(page)
+        before_send_imgs = get_all_image_srcs(page, include_pending=True)
         merged_old_imgs = list(dict.fromkeys(old_imgs + before_send_imgs))
 
         send_prompt(page, PROMPT_TAO_ANH, max_send_attempts=1)
@@ -1347,10 +1509,9 @@ def try_create_image(page, old_imgs):
             if is_generating(page):
                 started = True
                 break
-            img_url = get_latest_new_image(page, merged_old_imgs)
-            if img_url:
-                print("✓ Có ảnh mới")
-                return img_url
+            if get_latest_new_image(page, merged_old_imgs):
+                started = True
+                break
             sleep(2)
 
         if not started:
@@ -1464,7 +1625,7 @@ def find_gemini_viewer_download_button(page):
     return None
 
 
-def download_gemini_fullsize_image(page, output_path):
+def download_gemini_fullsize_image(page, output_path, expected_image_src):
     print("→ Tải ảnh full-size từ Gemini")
     
     for attempt in range(1, 4):
@@ -1479,22 +1640,16 @@ def download_gemini_fullsize_image(page, output_path):
                 pass
 
             if not viewer_open:
-                print("→ Click ảnh kết quả cuối cùng để mở viewer")
-                img_loc = page.locator('message-content img, .message-content img')
-                if img_loc.count() == 0:
-                    img_loc = page.locator('img')
-                    
-                if img_loc.count() > 0:
-                    last_img = img_loc.last
-                    last_img.scroll_into_view_if_needed()
-                    last_img.hover()
+                print("→ Mở đúng ảnh kết quả để tải")
+                image = find_image_locator(page, expected_image_src)
+                if image:
+                    image.scroll_into_view_if_needed()
+                    image.hover()
                     sleep(1)
-                    last_img.click(force=True)
+                    image.click(force=True)
                     sleep(2)
                 else:
-                    print("⚠ Không tìm thấy ảnh kết quả nào trên trang")
-                    sleep(2)
-                    continue
+                    raise Exception("Không tìm thấy đúng ảnh kết quả cần tải trên trang")
 
             btn = find_gemini_viewer_download_button(page)
             
@@ -1535,14 +1690,11 @@ def download_gemini_fullsize_image(page, output_path):
             
     print("⚠ Không tải được ảnh full-size, fallback screenshot preview chất lượng thấp")
     try:
-        img_loc = page.locator('message-content img, .message-content img')
-        if img_loc.count() == 0:
-            img_loc = page.locator('img')
-        if img_loc.count() > 0:
-            last_img = img_loc.last
-            last_img.scroll_into_view_if_needed()
-            last_img.wait_for(state="visible", timeout=15000)
-            last_img.screenshot(path=output_path)
+        image = find_image_locator(page, expected_image_src)
+        if image:
+            image.scroll_into_view_if_needed()
+            image.wait_for(state="visible", timeout=15000)
+            image.screenshot(path=output_path)
             if os.path.exists(output_path) and os.path.getsize(output_path) > 10000:
                 print(f"✓ Đã lưu ảnh: {output_path}")
                 return True
@@ -1552,53 +1704,120 @@ def download_gemini_fullsize_image(page, output_path):
     raise Exception("Không tải được ảnh sau tất cả các phương thức kể cả fallback screenshot")
 
 
-def download_gemini_image(page, path):
-    return download_gemini_fullsize_image(page, path)
+def download_gemini_image(page, path, expected_image_src):
+    return download_gemini_fullsize_image(page, path, expected_image_src)
+
+
+def is_valid_image_file(path):
+    try:
+        with Image.open(path) as img:
+            if min(img.size) < 80:
+                return False
+            img.verify()
+        return True
+    except (OSError, ValueError, SyntaxError):
+        return False
+
+
+def normalize_image_bytes(data):
+    """Reject HTML/error responses and encode the actual PNG promised by the filename."""
+    try:
+        with Image.open(BytesIO(data)) as img:
+            img.load()
+            if min(img.size) < 80:
+                raise ValueError("Ảnh tải về nhỏ hơn 80 × 80 pixel")
+            output = BytesIO()
+            img.convert("RGBA" if "A" in img.getbands() or "transparency" in img.info else "RGB").save(output, format="PNG")
+            return output.getvalue()
+    except (OSError, ValueError, SyntaxError) as exc:
+        raise ValueError(f"Dữ liệu tải về không phải ảnh kết quả hợp lệ: {exc}") from exc
+
+
+def fetch_image_in_browser(page, url):
+    encoded = page.evaluate("""
+        async (u) => {
+            const controller = new AbortController();
+            const timer = setTimeout(() => controller.abort(), 45000);
+            try {
+                const response = await fetch(u, {credentials: 'include', signal: controller.signal});
+                if (!response.ok) throw new Error('HTTP ' + response.status);
+                const blob = await response.blob();
+                return await new Promise((resolve, reject) => {
+                    const reader = new FileReader();
+                    reader.onload = () => resolve(reader.result.split(',')[1]);
+                    reader.onerror = () => reject(new Error('Không đọc được dữ liệu ảnh'));
+                    reader.readAsDataURL(blob);
+                });
+            } finally { clearTimeout(timer); }
+        }
+    """, url)
+    return base64.b64decode(encoded, validate=True)
+
+
+def fetch_image_with_session(page, url):
+    # The request context shares browser cookies and is not restricted by page CORS.
+    response = page.context.request.get(url, headers={"Referer": page.url}, timeout=45000)
+    try:
+        if not response.ok:
+            raise ValueError(f"HTTP {response.status}")
+        return response.body()
+    finally:
+        response.dispose()
+
+
+def read_loaded_image(page, url):
+    image = find_image_locator(page, url)
+    if image is None:
+        raise ValueError("Ảnh kết quả không còn trên trang")
+    encoded = image.evaluate("""
+        (img) => {
+            if (!img.complete || img.naturalWidth < 80 || img.naturalHeight < 80)
+                throw new Error('Ảnh chưa tải xong');
+            const canvas = document.createElement('canvas');
+            canvas.width = img.naturalWidth;
+            canvas.height = img.naturalHeight;
+            canvas.getContext('2d').drawImage(img, 0, 0);
+            return canvas.toDataURL('image/png').split(',')[1];
+        }
+    """)
+    return base64.b64decode(encoded, validate=True)
 
 
 def download_image(page, url, path):
-    print("→ Tải ảnh")
-    temp_path = f"{path}.part"
+    print(f"→ Tải ảnh vào: {path}")
+    methods = [("trình duyệt", lambda: fetch_image_in_browser(page, url))]
+    if url.startswith(("https://", "http://")):
+        methods.append(("phiên đăng nhập", lambda: fetch_image_with_session(page, url)))
+    methods.append(("ảnh đã tải trên trang", lambda: read_loaded_image(page, url)))
+    errors = []
 
-    if url.startswith("data:image"):
-        data = base64.b64decode(url.split(",")[1])
-        with open(temp_path, "wb") as f:
-            f.write(data)
-        if os.path.getsize(temp_path) <= 10000:
-            raise Exception("File tải từ data URL quá nhỏ")
-        os.replace(temp_path, path)
+    for label, fetch in methods:
+        try:
+            data = normalize_image_bytes(fetch())
+        except Exception as exc:
+            # Do not print signed image URLs or entire browser/network error stacks.
+            errors.append(f"{label}: {type(exc).__name__}")
+            print(f"⚠ Không lấy được ảnh qua {label} ({type(exc).__name__}), thử cách tiếp theo")
+            continue
+
+        destination = Path(path)
+        temp_path = destination.with_name(destination.name + ".part")
+        try:
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            temp_path.write_bytes(data)
+            os.replace(temp_path, destination)
+        except OSError as exc:
+            raise OSError(f"Không lưu được ảnh vào {destination}: {exc}") from exc
+        finally:
+            temp_path.unlink(missing_ok=True)
+        print(f"✓ Đã lưu ảnh: {destination.resolve()} ({len(data):,} byte)")
         return
 
-    for attempt in range(1, 4):
-        try:
-            data = page.evaluate("""
-                async (u) => {
-                    const r = await fetch(u, {credentials:'include'});
-                    if (!r.ok) throw new Error('HTTP ' + r.status);
-                    const b = await r.blob();
-                    const buf = await b.arrayBuffer();
-                    return Array.from(new Uint8Array(buf));
-                }
-            """, url)
-
-            with open(temp_path, "wb") as f:
-                f.write(bytearray(data))
-
-            if os.path.getsize(temp_path) > 10000:
-                os.replace(temp_path, path)
-                return
-
-            raise Exception("File quá nhỏ")
-
-        except Exception as e:
-            print(f"⚠ Tải lỗi lần {attempt}: {e}")
-            sleep(5)
-
-    raise Exception("Không tải được ảnh")
+    raise RuntimeError("Không tải được ảnh kết quả qua các cách: " + "; ".join(errors))
 
 
-def process_one(page, all_images, img):
-    index = all_images.index(img) + 1
+def process_one(page, image_indices, img):
+    index = image_indices[img]
     save_name = get_output_name(img)
     save_path = os.path.join(DOWNLOAD_FOLDER, save_name)
 
@@ -1621,25 +1840,40 @@ def process_one(page, all_images, img):
         raise Exception("Không tạo được ảnh sau nhiều lần thử")
 
     if SERVICE == "gemini":
-        download_gemini_image(page, save_path)
+        download_gemini_image(page, save_path, img_url)
     else:
         download_image(page, img_url, save_path)
 
-    if os.path.exists(save_path) and os.path.getsize(save_path) > 10000:
+    if is_valid_image_file(save_path):
         print("✓ DONE")
         write_progress(index, img.name, save_name, "done", "OK")
     else:
-        raise Exception("File tải lỗi hoặc quá nhỏ")
+        raise Exception(f"File ảnh tải về không hợp lệ: {save_path}")
 
 
 def main():
     ensure_dirs()
     init_progress()
 
-    images = get_images()
-    images = apply_start_from(images)
+    all_images = get_images()
+    if RUN_MODE == "force" and not START_FROM:
+        raise ValueError("Chế độ chạy lại một ảnh yêu cầu giá trị 'Bắt đầu từ ảnh'.")
+
+    images = apply_start_from(all_images, require_single_match=(RUN_MODE == "force"))
+    image_indices = {img: index + 1 for index, img in enumerate(all_images)}
 
     batch = get_next_batch(images)
+    batch_result = {
+        "mode": RUN_MODE,
+        "requested_batch_size": BATCH_SIZE,
+        "selected_count": len(batch),
+        "completed_count": 0,
+        "success_count": 0,
+        "failure_count": 0,
+        "next_pending_count": 0,
+        "files": [img.name for img in batch],
+        "pending_before": get_job_state(images)["pending"],
+    }
 
     print(f"📁 Ảnh gốc: {IMAGE_FOLDER}")
     print(f"📁 Ảnh VN: {DOWNLOAD_FOLDER}")
@@ -1653,48 +1887,59 @@ def main():
         print(f"▶ Bắt đầu từ: {START_FROM}")
 
     if not batch:
-        print("✅ Không còn ảnh cần xử lý.")
-        return
+        return finish_batch_result(batch_result, images)
 
-    with sync_playwright() as p:
-        context = None
-        try:
-            context = p.chromium.launch_persistent_context(
-                user_data_dir=PROFILE_DIR,
-                headless=False,
-                accept_downloads=True,
-                args=[
-                    "--disable-blink-features=AutomationControlled"
-                ],
-                viewport={"width": 1400, "height": 900}
-            )
+    try:
+        with sync_playwright() as p:
+            context = None
+            try:
+                context = p.chromium.launch_persistent_context(
+                    user_data_dir=PROFILE_DIR,
+                    headless=False,
+                    accept_downloads=True,
+                    args=[
+                        "--disable-blink-features=AutomationControlled"
+                    ],
+                    viewport={"width": 1400, "height": 900}
+                )
 
-            page = context.pages[0] if context.pages else context.new_page()
+                page = context.pages[0] if context.pages else context.new_page()
 
-            minimize_own_browser(context)
-            login_if_needed(page)
+                minimize_own_browser(context)
+                login_if_needed(page)
 
-            for img in batch:
-                try:
-                    index = images.index(img) + 1
-                    save_name = get_output_name(img)
-                    process_one(page, images, img)
-
-                except Exception as e:
-                    index = getattr(img, '_batch_index', 0) or (images.index(img) + 1 if img in images else 0)
+                for position, img in enumerate(batch):
                     try:
+                        index = image_indices[img]
                         save_name = get_output_name(img)
-                    except Exception:
-                        save_name = img.stem + "_VN.png"
-                    print(f"✗ Lỗi: {e}")
-                    write_progress(index, img.name, save_name, "fail", str(e))
+                        process_one(page, image_indices, img)
+                        batch_result["success_count"] += 1
 
-                print(f"⏸ Nghỉ {WAIT_AFTER_EACH_IMAGE} giây")
-                sleep(WAIT_AFTER_EACH_IMAGE)
-        finally:
-            if context is not None:
-                context.close()
+                    except Exception as e:
+                        index = image_indices.get(img, 0)
+                        try:
+                            save_name = get_output_name(img)
+                        except Exception:
+                            save_name = img.stem + "_VN.png"
+                        print(f"✗ Lỗi: {e}")
+                        write_progress(index, img.name, save_name, "fail", str(e))
+                        batch_result["failure_count"] += 1
+                    finally:
+                        batch_result["completed_count"] += 1
+
+                    # The final image does not need a cooldown before the app
+                    # evaluates whether to schedule the next batch.
+                    if position < len(batch) - 1:
+                        print(f"⏸ Nghỉ {WAIT_AFTER_EACH_IMAGE} giây")
+                        sleep(WAIT_AFTER_EACH_IMAGE)
+            finally:
+                if context is not None:
+                    context.close()
+    except Exception as e:
+        batch_result["fatal_error"] = str(e)
+        raise
+    return finish_batch_result(batch_result, images)
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
