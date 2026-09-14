@@ -7,6 +7,7 @@ Mỗi lần chạy đối chiếu từng ảnh nguồn với ảnh kết quả h
 - Exit code 0: lần chạy kết thúc bình thường. Trường `job.state=complete` xác nhận toàn bộ job đã xong; code 0 riêng lẻ cũng có thể chỉ là một batch thành công.
 - Exit code 2: batch có ảnh lỗi hoặc hết ảnh chờ nhưng còn ảnh lỗi cần chạy lại.
 - Exit code 3: batch chính không làm giảm số ảnh chờ; dừng để tránh lặp lại vô hạn.
+- Exit code 4: batch có thể tiếp tục nhưng đang chờ tài khoản ChatGPT khả dụng (`job.state=waiting_quota`); ảnh đang dở không bị ghi là lỗi và giao diện không tự chạy batch kế tiếp.
 - Exit code 1: ngoại lệ không xử lý được, chẳng hạn không đọc được thư mục hoặc không khởi động được trình duyệt.
 
 Giao diện chỉ tự hẹn batch tiếp theo sau một batch chính đủ ảnh, thành công và còn ảnh chờ. Batch cuối có ít ảnh hơn cấu hình vẫn được xác nhận hoàn tất job khi toàn bộ kết quả hợp lệ. Không còn ảnh thì worker thoát trước khi mở trình duyệt. Giao diện giữ mở để xem log; không tự hẹn thêm sau khi job hoàn tất hoặc cần chạy lại lỗi.

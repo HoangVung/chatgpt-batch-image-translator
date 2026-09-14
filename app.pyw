@@ -1,17 +1,68 @@
 import os
 import sys
-import json
-import math
-import queue
-import threading
 import subprocess
 import ctypes
 import time
+import re
+import uuid
+from pathlib import Path
+
+
+def select_launch_mode(argv=None, platform=None):
+    """Select the process role before importing either desktop shell."""
+    argv = list(sys.argv if argv is None else argv)
+    platform = sys.platform if platform is None else platform
+    if "--worker" in argv:
+        return "worker"
+    if "--self-test" in argv:
+        return "self-test"
+    if platform == "win32" and "--tk" not in argv:
+        return "web"
+    return "tk"
+
+
+def try_web_shell(run_webview, startup_error, error_stream=None):
+    """Run the web shell, returning False only for a startup-safe fallback."""
+    try:
+        run_webview()
+    except startup_error as exc:
+        stream = sys.stderr if error_stream is None else error_stream
+        if stream is not None:
+            print(f"Web shell failed to start; falling back to Tk shell: {exc}", file=stream)
+        return False
+    return True
+
+
+_LAUNCH_MODE = select_launch_mode() if __name__ == "__main__" else None
+if _LAUNCH_MODE == "self-test":
+    from desktop.webview_app import run_self_test
+
+    raise SystemExit(run_self_test())
+if _LAUNCH_MODE == "web":
+    from desktop.webview_app import WebShellStartupError, run_webview
+
+    if try_web_shell(run_webview, WebShellStartupError):
+        raise SystemExit(0)
+
+
 import tkinter as tk
 import customtkinter as ctk
 from tkinter import filedialog, messagebox
 from tkinter import font as tkfont
-from pathlib import Path
+
+from desktop_controller import (
+    ACCOUNT_EVENT_PREFIX,
+    BATCH_RESULT_PREFIX,
+    DesktopController,
+    Scheduler,
+)
+from desktop.runtime import (
+    build_process_launch,
+    get_active_chatgpt_account as get_active_account_from_settings,
+    load_settings as load_settings_file,
+    normalize_chatgpt_accounts as normalize_accounts,
+    save_settings as save_settings_file,
+)
 
 try:
     import winreg
@@ -27,7 +78,13 @@ def get_app_dir():
 
 APP_DIR = get_app_dir()
 SCRIPT_FILE = APP_DIR / "run_chatgpt_batch.py"
-BATCH_RESULT_PREFIX = "__BATCH_RESULT__="
+def get_resource_path(*parts):
+    """Resolve bundled read-only assets in source and PyInstaller builds."""
+    bundle_dir = Path(getattr(sys, "_MEIPASS", APP_DIR))
+    return bundle_dir.joinpath(*parts)
+
+
+APP_ICON_FILE = get_resource_path("assets", "app-icon.png")
 
 
 def get_data_dir():
@@ -43,14 +100,34 @@ DEFAULT_SETTINGS = {
     "image_folder": str(DATA_DIR / "images"),
     "download_folder": str(DATA_DIR / "images_vn"),
     "profile_dir": str(DATA_DIR / "chatgpt_auto_profile"),
+    "gemini_profile_dir": str(DATA_DIR / "gemini_auto_profile"),
+    "chatgpt_accounts": [
+        {
+            "id": "default",
+            "name": "ChatGPT 1",
+            "profile_dir": str(DATA_DIR / "chatgpt_auto_profile")
+        }
+    ],
+    "active_chatgpt_account_id": "default",
+    "auto_account_fallback_enabled": True,
     "batch_size": "10",
     "start_from": "",
-    "auto_next_enabled": False,
+    "auto_next_enabled": True,
     "auto_next_delay_minutes": "2",
     "theme": "system",
+    "ui_style": "classic",
     "language": "vi",
     "service": "chatgpt"
 }
+
+
+def copy_default_settings():
+    """Return settings with independent account metadata for each app instance."""
+    return {
+        **DEFAULT_SETTINGS,
+        "chatgpt_accounts": [dict(account) for account in DEFAULT_SETTINGS["chatgpt_accounts"]],
+    }
+
 
 LANGUAGE_OPTIONS = {
     "vi": "Tiếng Việt",
@@ -70,10 +147,22 @@ THEME_OPTIONS = {
     }
 }
 
+STYLE_OPTIONS = {
+    "vi": {
+        "classic": "Gốc",
+        "golden_gate": "macOS 27 Golden Gate"
+    },
+    "en": {
+        "classic": "Classic",
+        "golden_gate": "macOS 27 Golden Gate"
+    }
+}
+
 TEXT = {
     "vi": {
         "language": "Ngôn ngữ",
         "theme": "Giao diện",
+        "style": "Phong cách",
         "sidebar_title": "Dịch sách tự động",
         "sidebar_desc": "Upload ảnh, dịch nội dung, tạo ảnh Việt hóa và quản lý batch.",
         "status_label": "Trạng thái",
@@ -94,6 +183,35 @@ TEXT = {
         "source_folder": "Thư mục ảnh gốc",
         "output_folder": "Thư mục lưu ảnh VN",
         "profile": "Profile trình duyệt",
+        "chatgpt_account": "Tài khoản ChatGPT",
+        "chatgpt_account_hint": "Mỗi tài khoản dùng profile riêng; phiên đăng nhập không bị chia sẻ.",
+        "account_add": "Thêm",
+        "account_rename": "Đổi tên",
+        "account_remove": "Bỏ khỏi DS",
+        "account_login": "Đăng nhập",
+        "account_name_title": "Tài khoản ChatGPT",
+        "account_name_prompt": "Tên gợi nhớ (ví dụ: Business 2):",
+        "account_name_required": "Hãy nhập tên cho tài khoản.",
+        "account_name_exists": "Tên tài khoản này đã có. Hãy chọn tên khác.",
+        "account_added": "Đã chọn \"{name}\". Bấm \"Đăng nhập\" để mở phiên mới.",
+        "account_selected": "Đã chuyển sang profile \"{name}\". Lần chạy sau sẽ dùng tài khoản này.",
+        "account_renamed": "Đã đổi tên thành \"{name}\".",
+        "account_remove_title": "Bỏ tài khoản",
+        "account_remove_message": "Bỏ \"{name}\" khỏi danh sách? Thư mục profile và phiên đăng nhập sẽ không bị xóa.",
+        "account_removed": "Đã bỏ \"{name}\" khỏi danh sách.",
+        "account_last": "Cần giữ ít nhất một tài khoản ChatGPT trong danh sách.",
+        "account_change_running": "Hãy dừng batch hiện tại trước khi đổi hoặc quản lý tài khoản.",
+        "account_login_hint": "Mở trình duyệt để đăng nhập hoặc làm mới phiên của tài khoản đang chọn.",
+        "account_fallback": "Tự chuyển tài khoản khi hết lượt tạo ảnh",
+        "account_fallback_hint": "Chạy lại ảnh đang dở bằng profile ChatGPT kế tiếp đã đăng nhập.",
+        "account_quota_log": "⚠ {name} đã hết lượt tạo ảnh. Đang tìm tài khoản tiếp theo...",
+        "account_switched_log": "🔁 Đã chuyển sang {name}; đang chạy lại ảnh {image}.",
+        "account_skipped_log": "↷ Bỏ qua {name}: {reason}.",
+        "account_waiting_log": "⏸ Tạm dừng: {reason}. Ảnh đang dở: {image}.",
+        "account_fallback_off_log": "⏸ Tạm dừng vì tự chuyển tài khoản đang tắt. Ảnh đang dở: {image}.",
+        "account_waiting_status": "Đang chờ tài khoản ChatGPT khả dụng...",
+        "login_ready": "Phiên ChatGPT đã sẵn sàng.",
+        "login_ready_log": "=== PHIÊN CHATGPT ĐÃ SẴN SÀNG ===",
         "service": "Dịch vụ",
         "service_chatgpt": "ChatGPT",
         "service_gemini": "Google Gemini",
@@ -112,6 +230,7 @@ TEXT = {
         "auto_skip_incomplete": "=== Không tự chạy: batch vừa xong chưa đủ {count} ảnh. ===",
         "auto_skip_intervened": "=== Không tự chạy: đã có can thiệp thủ công trong lần chạy này. ===",
         "auto_skip_process_error": "=== Không tự chạy: worker kết thúc với mã {code}. ===",
+        "auto_recover_after_worker_exit": "=== Worker kết thúc với mã {code} sau khi đã báo batch thành công đầy đủ; vẫn tự chạy tiếp an toàn. ===",
         "auto_skip_no_more": "=== Không tự chạy: không còn ảnh đủ điều kiện để chạy tiếp. ===",
         "auto_skip_missing_result": "=== Không tự chạy: không nhận được kết quả batch đầy đủ từ worker. ===",
         "batch_result_log": "=== Kết quả batch: {success}/{selected} thành công, {failed} lỗi. ===",
@@ -154,6 +273,7 @@ TEXT = {
     "en": {
         "language": "Language",
         "theme": "Theme",
+        "style": "Style",
         "sidebar_title": "Automatic book translation",
         "sidebar_desc": "Upload images, translate content, generate localized images, and manage batches.",
         "status_label": "Status",
@@ -174,6 +294,35 @@ TEXT = {
         "source_folder": "Source image folder",
         "output_folder": "VN output folder",
         "profile": "Browser profile",
+        "chatgpt_account": "ChatGPT account",
+        "chatgpt_account_hint": "Each account uses a separate profile; signed-in sessions are never shared.",
+        "account_add": "Add",
+        "account_rename": "Rename",
+        "account_remove": "Remove",
+        "account_login": "Sign in",
+        "account_name_title": "ChatGPT account",
+        "account_name_prompt": "A memorable name (for example: Business 2):",
+        "account_name_required": "Enter a name for this account.",
+        "account_name_exists": "That account name already exists. Choose another name.",
+        "account_added": "Selected \"{name}\". Click \"Sign in\" to open its new session.",
+        "account_selected": "Switched to the \"{name}\" profile. The next run will use this account.",
+        "account_renamed": "Renamed the account to \"{name}\".",
+        "account_remove_title": "Remove account",
+        "account_remove_message": "Remove \"{name}\" from the list? Its profile folder and signed-in session will not be deleted.",
+        "account_removed": "Removed \"{name}\" from the list.",
+        "account_last": "Keep at least one ChatGPT account in the list.",
+        "account_change_running": "Stop the current batch before switching or managing accounts.",
+        "account_login_hint": "Open the browser to sign in or refresh the selected account session.",
+        "account_fallback": "Automatically switch when image quota is exhausted",
+        "account_fallback_hint": "Retry the unfinished image with the next signed-in ChatGPT profile.",
+        "account_quota_log": "⚠ {name} has exhausted its image quota. Looking for the next account...",
+        "account_switched_log": "🔁 Switched to {name}; retrying image {image}.",
+        "account_skipped_log": "↷ Skipping {name}: {reason}.",
+        "account_waiting_log": "⏸ Paused: {reason}. Unfinished image: {image}.",
+        "account_fallback_off_log": "⏸ Paused because automatic account switching is off. Unfinished image: {image}.",
+        "account_waiting_status": "Waiting for an available ChatGPT account...",
+        "login_ready": "The ChatGPT session is ready.",
+        "login_ready_log": "=== CHATGPT SESSION IS READY ===",
         "service": "Service",
         "service_chatgpt": "ChatGPT",
         "service_gemini": "Google Gemini",
@@ -192,6 +341,7 @@ TEXT = {
         "auto_skip_incomplete": "=== Not auto-running: the completed batch has fewer than {count} images. ===",
         "auto_skip_intervened": "=== Not auto-running: this run had manual intervention. ===",
         "auto_skip_process_error": "=== Not auto-running: the worker exited with code {code}. ===",
+        "auto_recover_after_worker_exit": "=== The worker exited with code {code} after reporting a complete successful batch; safely continuing automatically. ===",
         "auto_skip_no_more": "=== Not auto-running: no eligible images remain. ===",
         "auto_skip_missing_result": "=== Not auto-running: the worker did not return a complete batch result. ===",
         "batch_result_log": "=== Batch result: {success}/{selected} succeeded, {failed} failed. ===",
@@ -318,32 +468,450 @@ def copy_windows_clipboard_text(text):
         user32.CloseClipboard()
 
 
+def make_touch_scroll_handlers(
+    scroll_target,
+    *,
+    prevent_drag_selection=False,
+    prefer_pixel_scroll=False,
+    on_drag_start=None,
+):
+    """Turn touch-emulated primary-button drags into vertical scrolling."""
+    gesture = {
+        "active": False,
+        "last_y": 0,
+        "remainder": 0,
+        "distance": 0,
+        "moved": False,
+    }
+
+    def touch_press(event):
+        gesture["active"] = True
+        gesture["last_y"] = event.y_root
+        gesture["remainder"] = 0
+        gesture["distance"] = 0
+        gesture["moved"] = False
+        if prevent_drag_selection:
+            # A Text class binding starts its selection anchor on press. Stop
+            # it here, before motion can turn a swipe into highlighted text.
+            return "break"
+
+    def touch_move(event):
+        if not gesture["active"]:
+            return "break" if prevent_drag_selection else None
+
+        delta = event.y_root - gesture["last_y"]
+        gesture["last_y"] = event.y_root
+        gesture["distance"] += abs(delta)
+        if gesture["distance"] >= 4 and not gesture["moved"]:
+            gesture["moved"] = True
+            if on_drag_start is not None:
+                on_drag_start()
+
+        if prefer_pixel_scroll:
+            try:
+                # Tk's Text widget supports pixel scrolling, which is smoother
+                # than jumping one whole line at a time.
+                scroll_target.yview_scroll(-delta, "pixels")
+            except (tk.TclError, ValueError):
+                prefer_units = True
+            else:
+                prefer_units = False
+        else:
+            prefer_units = True
+
+        if prefer_units:
+            # Canvas-style targets accept logical units only. Keep a remainder
+            # so slow swipes still produce natural movement.
+            gesture["remainder"] -= delta
+            units = int(gesture["remainder"] / 24)
+            if units:
+                gesture["remainder"] -= units * 24
+                scroll_target.yview_scroll(units, "units")
+
+        if prevent_drag_selection or gesture["moved"]:
+            return "break"
+
+    def touch_release(event):
+        was_drag = gesture["moved"]
+        gesture["active"] = False
+        gesture["remainder"] = 0
+        gesture["distance"] = 0
+        gesture["moved"] = False
+        if prevent_drag_selection or was_drag:
+            return "break"
+
+    return touch_press, touch_move, touch_release
+
+
+class TkScheduler(Scheduler):
+    def __init__(self, root):
+        self.root = root
+
+    def call_later(self, delay_ms, callback):
+        return self.root.after(delay_ms, callback)
+
+    def cancel(self, handle):
+        self.root.after_cancel(handle)
+
+
 class ChatGPTBatchApp:
     def __init__(self, root):
         self.root = root
         self.root.title("ChatGPT Batch Translator PRO")
         self.root.geometry("1180x820")
         self.root.minsize(900, 620)
+        self.set_window_icon()
 
-        self.proc = None
-        self.log_queue = queue.Queue()
-        self.current_done = 0
-        self.current_total = 0
-        self.manual_action_required = False
-        self.log_history = []
-        self.current_run_mode = None
-        self.current_run_intervened = False
-        self.current_batch_result = None
-        self.auto_next_after_id = None
-        self.auto_next_deadline = None
-        self.auto_next_token = 0
+        self.controller = DesktopController(TkScheduler(root))
+        self._internal_account_update = False
 
         self.settings = self.load_settings()
+        self.normalize_chatgpt_accounts()
+        try:
+            auto_next_delay = DesktopController.parse_auto_next_delay(
+                str(self.settings.get("auto_next_delay_minutes", "2"))
+            )
+        except (TypeError, ValueError):
+            auto_next_delay = None
+        self.controller.configure_auto_next(
+            bool(self.settings.get("auto_next_enabled", False)),
+            auto_next_delay,
+        )
 
         self.setup_style()
         self.build_ui()
-        self.poll_log_queue()
+        self.poll_controller_events()
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
+
+    def _get_controller(self):
+        """Return the controller, including for legacy __new__-based tests."""
+        controller = self.__dict__.get("controller")
+        if controller is None:
+            controller = DesktopController(TkScheduler(getattr(self, "root", None)))
+            self.__dict__["controller"] = controller
+        return controller
+
+    @property
+    def proc(self):
+        return self._get_controller().process
+
+    @proc.setter
+    def proc(self, value):
+        self._get_controller().process = value
+
+    @property
+    def current_done(self):
+        return self._get_controller().state.progress_done
+
+    @current_done.setter
+    def current_done(self, value):
+        self._get_controller().state.progress_done = value
+
+    @property
+    def current_total(self):
+        return self._get_controller().state.progress_total
+
+    @current_total.setter
+    def current_total(self, value):
+        self._get_controller().state.progress_total = value
+
+    @property
+    def manual_action_required(self):
+        return self._get_controller().state.manual_action_required
+
+    @manual_action_required.setter
+    def manual_action_required(self, value):
+        self._get_controller().state.manual_action_required = value
+
+    @property
+    def log_history(self):
+        return self._get_controller().log_history
+
+    @log_history.setter
+    def log_history(self, value):
+        self._get_controller().log_history = value
+
+    @property
+    def current_run_mode(self):
+        return self._get_controller().state.current_run_mode
+
+    @current_run_mode.setter
+    def current_run_mode(self, value):
+        self._get_controller().state.current_run_mode = value
+
+    @property
+    def current_run_intervened(self):
+        return self._get_controller().state.current_run_intervened
+
+    @current_run_intervened.setter
+    def current_run_intervened(self, value):
+        self._get_controller().state.current_run_intervened = value
+
+    @property
+    def current_batch_result(self):
+        return self._get_controller().state.current_batch_result
+
+    @current_batch_result.setter
+    def current_batch_result(self, value):
+        self._get_controller().state.current_batch_result = value
+
+    @property
+    def auto_next_after_id(self):
+        return self._get_controller()._auto_next_handle
+
+    @auto_next_after_id.setter
+    def auto_next_after_id(self, value):
+        self._get_controller()._auto_next_handle = value
+
+    @property
+    def auto_next_deadline(self):
+        return self._get_controller().state.auto_next_deadline
+
+    @auto_next_deadline.setter
+    def auto_next_deadline(self, value):
+        state = self._get_controller().state
+        state.auto_next_deadline = value
+        state.auto_next_active = value is not None
+
+    @property
+    def auto_next_token(self):
+        return self._get_controller().state.auto_next_token
+
+    @auto_next_token.setter
+    def auto_next_token(self, value):
+        self._get_controller().state.auto_next_token = value
+
+    def set_window_icon(self):
+        """Apply the branded icon to the title bar, taskbar, and app switcher."""
+        try:
+            self.window_icon = tk.PhotoImage(file=str(APP_ICON_FILE))
+            self.root.iconphoto(True, self.window_icon)
+        except (OSError, tk.TclError):
+            self.window_icon = None
+
+    @staticmethod
+    def get_scrollable_main_layout(natural_height, viewport_height):
+        """Return the canvas-window height and whether the log card can grow."""
+        natural_height = max(1, natural_height)
+        viewport_height = max(1, viewport_height)
+        return max(natural_height, viewport_height), natural_height <= viewport_height
+
+    def normalize_chatgpt_accounts(self):
+        """Validate account metadata and migrate the legacy single profile.
+
+        Browser cookies remain only in each Playwright profile directory.  The
+        settings file stores a friendly label and a directory path, never a
+        password, cookie, or ChatGPT token.
+        """
+        return normalize_accounts(self.settings, DATA_DIR)
+
+    def get_active_chatgpt_account(self):
+        return get_active_account_from_settings(self.settings, DATA_DIR)
+
+    def is_worker_running(self):
+        proc = getattr(self, "proc", None)
+        if not proc:
+            return False
+        try:
+            return proc.poll() is None
+        except AttributeError:
+            return True
+
+    def can_change_chatgpt_account(self):
+        if self.is_worker_running():
+            messagebox.showwarning(self.t("running_title"), self.t("account_change_running"))
+            return False
+        return True
+
+    def refresh_chatgpt_account_controls(self):
+        active = self.get_active_chatgpt_account()
+        if hasattr(self, "account_var"):
+            self.account_var.set(active["name"])
+        combo = getattr(self, "account_combo", None)
+        if combo is not None:
+            combo.configure(values=[account["name"] for account in self.settings["chatgpt_accounts"]])
+
+    def set_chatgpt_account_controls_visible(self, visible):
+        field = getattr(self, "account_field", None)
+        if field is None:
+            return
+        if visible:
+            field.grid()
+        else:
+            field.grid_remove()
+
+    def on_service_change(self, _=None):
+        service = self.service_var.get()
+        previous_service = getattr(self, "last_service_value", service)
+        if previous_service == "Google Gemini":
+            self.settings["gemini_profile_dir"] = self.profile_var.get().strip() or self.settings["gemini_profile_dir"]
+        if service == "ChatGPT":
+            active = self.get_active_chatgpt_account()
+            self.profile_var.set(active["profile_dir"])
+            self.set_chatgpt_account_controls_visible(True)
+        else:
+            self.profile_var.set(self.settings["gemini_profile_dir"])
+            self.set_chatgpt_account_controls_visible(False)
+        self.last_service_value = service
+
+    def select_chatgpt_account(self, selected_name=None):
+        if not self.can_change_chatgpt_account():
+            self.refresh_chatgpt_account_controls()
+            return
+
+        selected_name = (selected_name or self.account_var.get()).strip()
+        account = next(
+            (item for item in self.normalize_chatgpt_accounts() if item["name"] == selected_name),
+            None,
+        )
+        if account is None:
+            self.refresh_chatgpt_account_controls()
+            return
+
+        self.settings["active_chatgpt_account_id"] = account["id"]
+        self.profile_var.set(account["profile_dir"])
+        self.refresh_chatgpt_account_controls()
+        self.save_settings()
+        self.status_var.set(self.t("account_selected", name=account["name"]))
+
+    def set_worker_active_account(self, account_id):
+        """Reflect a worker-side fallback without treating it as user input."""
+        account_id = str(account_id or "").strip()
+        account = next(
+            (item for item in self.normalize_chatgpt_accounts() if item["id"] == account_id),
+            None,
+        )
+        if account is None:
+            return
+
+        self._internal_account_update = True
+        try:
+            self.settings["active_chatgpt_account_id"] = account["id"]
+            self.profile_var.set(account["profile_dir"])
+            self.refresh_chatgpt_account_controls()
+        finally:
+            self._internal_account_update = False
+        self.save_settings()
+
+    def prompt_chatgpt_account_name(self, initialvalue=""):
+        """Collect an account label in a dialog owned by CustomTkinter.
+
+        ``tkinter.simpledialog`` can be hidden behind a CustomTkinter root on
+        Windows.  CTkInputDialog is topmost and modal, so the Rename action
+        remains visibly actionable at any DPI setting.
+        """
+        dialog = ctk.CTkInputDialog(
+            title=self.t("account_name_title"),
+            text=self.t("account_name_prompt"),
+        )
+
+        if initialvalue:
+            def fill_initial_value():
+                entry = getattr(dialog, "_entry", None)
+                if entry is not None:
+                    entry.insert(0, initialvalue)
+                    entry.select_range(0, "end")
+
+            # CTkInputDialog creates its entry shortly after construction.
+            dialog.after(20, fill_initial_value)
+
+        name = dialog.get_input()
+        if name is None:
+            return None
+        name = name.strip()
+        if not name:
+            messagebox.showerror(self.t("error_title"), self.t("account_name_required"))
+            return None
+        return name
+
+    def account_name_exists(self, name, except_id=None):
+        normalized_name = name.casefold()
+        return any(
+            account["name"].casefold() == normalized_name and account["id"] != except_id
+            # Account actions call normalize_chatgpt_accounts before they
+            # select an account.  Calling it again here replaces the list
+            # with copied dictionaries, so a subsequent rename would mutate
+            # an orphaned copy rather than the saved account.
+            for account in self.settings.get("chatgpt_accounts", [])
+        )
+
+    def new_chatgpt_profile_dir(self, name):
+        safe_name = re.sub(r"[^A-Za-z0-9_-]+", "_", name).strip("._-") or "account"
+        base_dir = DATA_DIR / f"chatgpt_auto_profile_{safe_name[:48]}"
+        existing_paths = {account["profile_dir"] for account in self.normalize_chatgpt_accounts()}
+        candidate = base_dir
+        suffix = 2
+        while str(candidate) in existing_paths or candidate.exists():
+            candidate = DATA_DIR / f"{base_dir.name}_{suffix}"
+            suffix += 1
+        return str(candidate)
+
+    def add_chatgpt_account(self):
+        if not self.can_change_chatgpt_account():
+            return
+        name = self.prompt_chatgpt_account_name()
+        if name is None:
+            return
+        if self.account_name_exists(name):
+            messagebox.showerror(self.t("error_title"), self.t("account_name_exists"))
+            return
+
+        account = {
+            "id": f"account-{uuid.uuid4().hex}",
+            "name": name,
+            "profile_dir": self.new_chatgpt_profile_dir(name),
+        }
+        self.settings["chatgpt_accounts"].append(account)
+        self.settings["active_chatgpt_account_id"] = account["id"]
+        self.profile_var.set(account["profile_dir"])
+        self.refresh_chatgpt_account_controls()
+        self.save_settings()
+        self.status_var.set(self.t("account_added", name=name))
+
+    def rename_chatgpt_account(self):
+        if not self.can_change_chatgpt_account():
+            return
+        account = self.get_active_chatgpt_account()
+        name = self.prompt_chatgpt_account_name(account["name"])
+        if name is None:
+            return
+        if self.account_name_exists(name, except_id=account["id"]):
+            messagebox.showerror(self.t("error_title"), self.t("account_name_exists"))
+            return
+
+        account["name"] = name
+        self.refresh_chatgpt_account_controls()
+        self.save_settings()
+        self.status_var.set(self.t("account_renamed", name=name))
+
+    def remove_chatgpt_account(self):
+        if not self.can_change_chatgpt_account():
+            return
+        accounts = self.normalize_chatgpt_accounts()
+        if len(accounts) == 1:
+            messagebox.showwarning(self.t("account_remove_title"), self.t("account_last"))
+            return
+
+        account = self.get_active_chatgpt_account()
+        if not messagebox.askyesno(
+            self.t("account_remove_title"),
+            self.t("account_remove_message", name=account["name"]),
+            parent=self.root,
+        ):
+            return
+
+        accounts.remove(account)
+        next_account = accounts[0]
+        self.settings["active_chatgpt_account_id"] = next_account["id"]
+        self.profile_var.set(next_account["profile_dir"])
+        self.refresh_chatgpt_account_controls()
+        self.save_settings()
+        self.status_var.set(self.t("account_removed", name=account["name"]))
+
+    def login_chatgpt_account(self):
+        if not self.can_change_chatgpt_account():
+            return
+        self.start("login")
 
     def language_code(self):
         code = self.settings.get("language", DEFAULT_SETTINGS["language"])
@@ -381,6 +949,13 @@ class ChatGPTBatchApp:
     def current_theme_label(self):
         return THEME_OPTIONS[self.language_code()][self.theme_code()]
 
+    def style_code(self):
+        code = self.settings.get("ui_style", DEFAULT_SETTINGS["ui_style"])
+        return code if code in STYLE_OPTIONS["en"] else DEFAULT_SETTINGS["ui_style"]
+
+    def current_style_label(self):
+        return STYLE_OPTIONS[self.language_code()][self.style_code()]
+
     def set_language(self, code):
         if code == self.language_code():
             return
@@ -403,6 +978,72 @@ class ChatGPTBatchApp:
         for child in self.root.winfo_children():
             child.destroy()
         self.build_ui()
+
+    def set_style(self, code):
+        """Apply a visual style without interrupting an active workflow.
+
+        Theme changes keep their existing behavior. Style changes only replace
+        presentation widgets and deliberately leave the worker, timers, log
+        history, and workflow state untouched.
+        """
+        if code == self.style_code():
+            return
+
+        # Keep transient presentation state while replacing the widget tree.
+        # The worker and auto-next timer remain owned by this app instance.
+        status_value = None
+        progress_value = None
+        progress_label_value = None
+        countdown_value = None
+        scroll_position = None
+        try:
+            status_value = self.status_var.get()
+        except (AttributeError, tk.TclError):
+            pass
+        try:
+            progress_value = self.progress_var.get()
+        except (AttributeError, tk.TclError):
+            pass
+        try:
+            progress_label_value = self.progress_label.get()
+        except (AttributeError, tk.TclError):
+            pass
+        try:
+            countdown_value = self.auto_next_countdown_var.get()
+        except (AttributeError, tk.TclError):
+            pass
+        try:
+            scroll_position = self.main_canvas.yview()
+        except (AttributeError, tk.TclError):
+            pass
+
+        self.settings["ui_style"] = code
+        self.save_settings()
+        self.setup_style()
+        for child in self.root.winfo_children():
+            child.destroy()
+        self.build_ui()
+
+        if status_value is not None:
+            self.status_var.set(status_value)
+        if progress_value is not None:
+            self.progress_var.set(progress_value)
+        if progress_label_value is not None:
+            self.progress_label.set(progress_label_value)
+        if self.auto_next_deadline is not None:
+            self.set_auto_next_controls_visible(True)
+            try:
+                self.auto_next_countdown_var.set(countdown_value or status_value or "")
+            except (AttributeError, tk.TclError):
+                pass
+        if scroll_position:
+            try:
+                self.main_canvas.yview_moveto(scroll_position[0])
+                schedule_layout = getattr(self, "schedule_main_layout", None)
+                if schedule_layout is not None:
+                    schedule_layout(restore_position=scroll_position[0])
+            except (AttributeError, tk.TclError):
+                pass
 
     def add_header_menu(self, parent, label, current_text, choices, command, width):
         c = self.colors
@@ -442,6 +1083,66 @@ class ChatGPTBatchApp:
         return button
 
     def get_palette(self):
+        if self.style_code() == "golden_gate":
+            if self.effective_theme_code() == "dark":
+                return {
+                    "app_bg": "#1c1c1e",
+                    "chrome_bg": "#242426",
+                    "sidebar_bg": "#242426",
+                    "card_bg": "#2c2c2e",
+                    "input_bg": "#353539",
+                    "log_bg": "#202023",
+                    "text": "#f5f5f7",
+                    "muted": "#b8b8be",
+                    "field": "#e7e7eb",
+                    "border": "#48484d",
+                    "gray_btn": "#353539",
+                    "gray_btn_active": "#414147",
+                    "gray_btn_pressed": "#2c2c30",
+                    "scroll_track": "#202023",
+                    "scroll_thumb": "#85858b",
+                    "scroll_arrow": "#b8b8be",
+                    "selection": "#38587f",
+                    "accent": "#5e9cff",
+                    "accent_hover": "#73aaff",
+                    "accent_pressed": "#4b87e6",
+                    "accent_text": "#111a2a",
+                    "danger": "#ffb7b0",
+                    "danger_hover": "#49312f",
+                    "danger_pressed": "#573532",
+                    "disabled_bg": "#303034",
+                    "disabled_text": "#85858b"
+                }
+
+            return {
+                "app_bg": "#f3f4f7",
+                "chrome_bg": "#f8f9fc",
+                "sidebar_bg": "#f8f9fc",
+                "card_bg": "#ffffff",
+                "input_bg": "#f8f9fc",
+                "log_bg": "#f5f6f9",
+                "text": "#1d1d1f",
+                "muted": "#6e6e73",
+                "field": "#303038",
+                "border": "#d9dce3",
+                "gray_btn": "#f8f9fc",
+                "gray_btn_active": "#eceef4",
+                "gray_btn_pressed": "#e2e5ec",
+                "scroll_track": "#f5f6f9",
+                "scroll_thumb": "#8a8d96",
+                "scroll_arrow": "#6e6e73",
+                "selection": "#cfe1ff",
+                "accent": "#3478f6",
+                "accent_hover": "#4b88f7",
+                "accent_pressed": "#2865d4",
+                "accent_text": "#ffffff",
+                "danger": "#b42318",
+                "danger_hover": "#fce9e7",
+                "danger_pressed": "#f8d9d5",
+                "disabled_bg": "#eceef2",
+                "disabled_text": "#8c8f97"
+            }
+
         if self.effective_theme_code() == "dark":
             return {
                 "app_bg": "#202020",
@@ -542,36 +1243,45 @@ class ChatGPTBatchApp:
             pass
 
     def load_settings(self):
-        if SETTINGS_FILE.exists():
-            try:
-                with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
-                    return {**DEFAULT_SETTINGS, **json.load(f)}
-            except Exception:
-                pass
-
-        return DEFAULT_SETTINGS.copy()
+        return load_settings_file(SETTINGS_FILE, DEFAULT_SETTINGS)
 
     def save_settings(self):
         service_map = {"ChatGPT": "chatgpt", "Google Gemini": "gemini", "chatgpt": "chatgpt", "gemini": "gemini"}
         auto_next_var = getattr(self, "auto_next_var", None)
         auto_next_delay_var = getattr(self, "auto_next_delay_var", None)
+        auto_account_fallback_var = getattr(self, "auto_account_fallback_var", None)
+        service = service_map.get(self.service_var.get(), "chatgpt")
+        profile_dir = self.profile_var.get().strip()
+        accounts = self.normalize_chatgpt_accounts()
+        if service == "chatgpt":
+            active_account = self.get_active_chatgpt_account()
+            if profile_dir:
+                active_account["profile_dir"] = profile_dir
+            else:
+                profile_dir = active_account["profile_dir"]
+        elif profile_dir:
+            self.settings["gemini_profile_dir"] = profile_dir
+
         data = {
             **self.settings,
             "image_folder": self.image_var.get(),
             "download_folder": self.output_var.get(),
-            "profile_dir": self.profile_var.get(),
+            "profile_dir": profile_dir,
+            "gemini_profile_dir": self.settings["gemini_profile_dir"],
+            "chatgpt_accounts": accounts,
+            "active_chatgpt_account_id": self.settings["active_chatgpt_account_id"],
+            "auto_account_fallback_enabled": bool(auto_account_fallback_var.get()) if auto_account_fallback_var else True,
             "batch_size": self.batch_var.get(),
             "start_from": self.start_from_var.get(),
             "auto_next_enabled": bool(auto_next_var.get()) if auto_next_var else False,
             "auto_next_delay_minutes": auto_next_delay_var.get() if auto_next_delay_var else "2",
             "theme": self.theme_code(),
+            "ui_style": self.style_code(),
             "language": self.language_code(),
-            "service": service_map.get(self.service_var.get(), "chatgpt")
+            "service": service,
         }
 
-        SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
-        with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
+        save_settings_file(SETTINGS_FILE, data)
         self.settings = data
 
     def build_ui(self):
@@ -598,6 +1308,14 @@ class ChatGPTBatchApp:
             self.set_theme,
             16
         )
+        style_button = self.add_header_menu(
+            header_controls,
+            self.t("style"),
+            self.current_style_label(),
+            list(STYLE_OPTIONS[self.language_code()].items()),
+            self.set_style,
+            22
+        )
         language_button = self.add_header_menu(
             header_controls,
             self.t("language"),
@@ -607,7 +1325,7 @@ class ChatGPTBatchApp:
             12
         )
 
-        header_boxes = (theme_button.master, language_button.master)
+        header_boxes = (theme_button.master, style_button.master, language_button.master)
 
         def layout_header(event):
             stacked = event.width < 980
@@ -615,9 +1333,11 @@ class ChatGPTBatchApp:
                 box.pack_forget()
             if stacked:
                 language_button.master.pack(side="top", anchor="e", padx=(0, 0), pady=(0, 2))
+                style_button.master.pack(side="top", anchor="e", padx=(0, 0), pady=(0, 2))
                 theme_button.master.pack(side="top", anchor="e", padx=(0, 0))
             else:
                 theme_button.master.pack(side="right", padx=(12, 0))
+                style_button.master.pack(side="right", padx=(12, 0))
                 language_button.master.pack(side="right", padx=(12, 0))
 
         chrome.bind("<Configure>", layout_header)
@@ -671,22 +1391,59 @@ class ChatGPTBatchApp:
         main.columnconfigure(0, weight=1)
         main_window = self.main_canvas.create_window((0, 0), window=main, anchor="nw")
 
-        def update_main_scrollregion(event=None):
-            self.main_canvas.configure(scrollregion=self.main_canvas.bbox("all"))
+        layout_state = {"scheduled": False, "restore_position": None}
 
-        def resize_main_content(event=None):
-            viewport_width = event.width if event is not None else self.main_canvas.winfo_width()
-            viewport_height = event.height if event is not None else self.main_canvas.winfo_height()
-            self.main_canvas.itemconfigure(main_window, width=viewport_width)
+        def sync_main_layout():
+            """Size the canvas window after all child widgets have settled.
+
+            Changing the visual style rebuilds the widget tree asynchronously.
+            Measuring it during the first canvas resize can lock the embedded
+            frame to the viewport height before the log card is laid out,
+            leaving its lower content unreachable.  Reflowing after idle keeps
+            short screens filled and makes taller screens genuinely scrollable.
+            """
+            layout_state["scheduled"] = False
+            viewport_width = max(1, self.main_canvas.winfo_width())
+            viewport_height = max(1, self.main_canvas.winfo_height())
+
             main.update_idletasks()
             natural_height = main.winfo_reqheight()
-            fill_height = max(natural_height, viewport_height)
-            self.main_canvas.itemconfigure(main_window, height=fill_height)
-            main.rowconfigure(3, weight=1 if natural_height < viewport_height else 0)
-            update_main_scrollregion()
+            _, log_can_expand = self.get_scrollable_main_layout(
+                natural_height,
+                viewport_height,
+            )
+            main.rowconfigure(3, weight=1 if log_can_expand else 0)
+            main.update_idletasks()
+            content_height, _ = self.get_scrollable_main_layout(
+                main.winfo_reqheight(),
+                viewport_height,
+            )
 
-        main.bind("<Configure>", update_main_scrollregion)
-        self.main_canvas.bind("<Configure>", resize_main_content)
+            self.main_canvas.itemconfigure(
+                main_window,
+                width=viewport_width,
+                height=content_height,
+            )
+            self.main_canvas.configure(
+                scrollregion=(0, 0, viewport_width, content_height)
+            )
+
+            restore_position = layout_state["restore_position"]
+            layout_state["restore_position"] = None
+            if restore_position is not None:
+                self.main_canvas.yview_moveto(max(0.0, min(1.0, restore_position)))
+
+        def schedule_main_layout(event=None, restore_position=None):
+            if restore_position is not None:
+                layout_state["restore_position"] = restore_position
+            if layout_state["scheduled"]:
+                return
+            layout_state["scheduled"] = True
+            self.root.after_idle(sync_main_layout)
+
+        self.schedule_main_layout = schedule_main_layout
+        main.bind("<Configure>", schedule_main_layout)
+        self.main_canvas.bind("<Configure>", schedule_main_layout)
 
         self.image_var = tk.StringVar(value=self.settings["image_folder"])
         self.output_var = tk.StringVar(value=self.settings["download_folder"])
@@ -697,10 +1454,16 @@ class ChatGPTBatchApp:
         self.auto_next_delay_var = tk.StringVar(
             value=str(self.settings.get("auto_next_delay_minutes", "2"))
         )
+        self.auto_account_fallback_var = tk.BooleanVar(
+            value=bool(self.settings.get("auto_account_fallback_enabled", True))
+        )
         
         current_service = self.settings.get("service", "chatgpt")
         display_service = "Google Gemini" if current_service == "gemini" else "ChatGPT"
         self.service_var = tk.StringVar(value=display_service)
+        self.last_service_value = display_service
+        active_chatgpt_account = self.get_active_chatgpt_account()
+        self.account_var = tk.StringVar(value=active_chatgpt_account["name"])
 
         for variable in (
             self.image_var,
@@ -768,22 +1531,12 @@ class ChatGPTBatchApp:
             font=(self.ui_font, 13)
         ).pack(anchor="w", pady=(0, 6))
 
-        def on_service_change(event=None):
-            val = self.service_var.get()
-            current_profile = self.profile_var.get()
-            if val == "Google Gemini" and "chatgpt_auto_profile" in current_profile:
-                new_profile = current_profile.replace("chatgpt_auto_profile", "gemini_auto_profile")
-                self.profile_var.set(new_profile)
-            elif val == "ChatGPT" and "gemini_auto_profile" in current_profile:
-                new_profile = current_profile.replace("gemini_auto_profile", "chatgpt_auto_profile")
-                self.profile_var.set(new_profile)
-
         self.service_combo = ctk.CTkComboBox(
             service_field,
             variable=self.service_var,
             values=["ChatGPT", "Google Gemini"],
             state="readonly",
-            command=on_service_change,
+            command=self.on_service_change,
             width=210,
             height=38,
             corner_radius=6,
@@ -799,6 +1552,83 @@ class ChatGPTBatchApp:
             dropdown_font=(self.ui_font, 14)
         )
         self.service_combo.pack(anchor="w")
+
+        self.account_field = ctk.CTkFrame(options, fg_color="transparent", corner_radius=0)
+        self.account_field.grid(row=1, column=0, columnspan=3, sticky="ew", pady=(16, 0))
+        account_top = ctk.CTkFrame(self.account_field, fg_color="transparent", corner_radius=0)
+        account_top.pack(fill="x")
+        ctk.CTkLabel(
+            account_top,
+            text=self.t("chatgpt_account"),
+            text_color=c["field"],
+            font=(self.ui_font, 13)
+        ).pack(side="left", padx=(0, 12))
+        self.account_combo = ctk.CTkComboBox(
+            account_top,
+            variable=self.account_var,
+            values=[account["name"] for account in self.settings["chatgpt_accounts"]],
+            state="readonly",
+            command=self.select_chatgpt_account,
+            width=210,
+            height=36,
+            corner_radius=6,
+            fg_color=c["input_bg"],
+            border_color=c["border"],
+            button_color=c["gray_btn_active"],
+            button_hover_color=c["border"],
+            dropdown_fg_color=c["card_bg"],
+            dropdown_hover_color=c["gray_btn_active"],
+            text_color=c["text"],
+            dropdown_text_color=c["text"],
+            font=(self.ui_font, 13),
+            dropdown_font=(self.ui_font, 13)
+        )
+        self.account_combo.pack(side="left")
+        for text, command, width in (
+            (self.t("account_add"), self.add_chatgpt_account, 70),
+            (self.t("account_rename"), self.rename_chatgpt_account, 82),
+            (self.t("account_remove"), self.remove_chatgpt_account, 94),
+            (self.t("account_login"), self.login_chatgpt_account, 96),
+        ):
+            ctk.CTkButton(
+                account_top,
+                text=text,
+                command=command,
+                width=width,
+                height=34,
+                corner_radius=6,
+                fg_color=c["gray_btn"],
+                hover_color=c["gray_btn_active"],
+                border_width=1,
+                border_color=c["border"],
+                text_color=c["text"],
+                font=(self.ui_font, 12)
+            ).pack(side="left", padx=(8, 0))
+        ctk.CTkLabel(
+            self.account_field,
+            text=self.t("chatgpt_account_hint"),
+            text_color=c["muted"],
+            font=(self.ui_font, 12)
+        ).pack(anchor="w", pady=(5, 0))
+        self.account_fallback_check = ctk.CTkCheckBox(
+            self.account_field,
+            text=self.t("account_fallback"),
+            variable=self.auto_account_fallback_var,
+            command=self.on_account_fallback_toggle,
+            text_color=c["field"],
+            fg_color=c["accent"],
+            hover_color=c["accent_hover"],
+            border_color=c["border"],
+            font=(self.ui_font, 12)
+        )
+        self.account_fallback_check.pack(anchor="w", pady=(9, 0))
+        ctk.CTkLabel(
+            self.account_field,
+            text=self.t("account_fallback_hint"),
+            text_color=c["muted"],
+            font=(self.ui_font, 11)
+        ).pack(anchor="w", padx=(28, 0), pady=(2, 0))
+        self.set_chatgpt_account_controls_visible(display_service == "ChatGPT")
 
         ctk.CTkLabel(
             batch_field,
@@ -853,7 +1683,7 @@ class ChatGPTBatchApp:
         start_field.bind("<Configure>", layout_start_hint)
 
         auto_field = ctk.CTkFrame(options, fg_color="transparent", corner_radius=0)
-        auto_field.grid(row=1, column=0, columnspan=3, sticky="ew", pady=(16, 0))
+        auto_field.grid(row=2, column=0, columnspan=3, sticky="ew", pady=(16, 0))
         ctk.CTkSwitch(
             auto_field,
             text=self.t("auto_next"),
@@ -894,7 +1724,7 @@ class ChatGPTBatchApp:
 
         self.add_folder_row(config_card, self.t("source_folder"), self.image_var, 3)
         self.add_folder_row(config_card, self.t("output_folder"), self.output_var, 4)
-        self.add_folder_row(config_card, self.t("profile"), self.profile_var, 5)
+        self.add_folder_row(config_card, self.t("profile"), self.profile_var, 5, choose_command=self.choose_profile_folder)
 
         action_card = ctk.CTkFrame(
             main,
@@ -1058,7 +1888,7 @@ class ChatGPTBatchApp:
             else:
                 self.continue_btn.grid(row=2, column=0, sticky="w", padx=(18, 12), pady=(12, 16))
                 self.stop_btn.grid(row=2, column=5, sticky="e", padx=(12, 18), pady=(12, 16))
-            self.root.after_idle(resize_main_content)
+            schedule_main_layout()
 
         action_card.bind("<Configure>", layout_actions)
 
@@ -1174,46 +2004,6 @@ class ChatGPTBatchApp:
             self.log_text.yview_scroll(-3 if event.num == 4 else 3, "units")
             return "break"
 
-        def make_touch_scroll_handlers(scroll_target):
-            """Turn the touch screen's mouse-emulated drag into vertical scrolling."""
-            gesture = {"active": False, "last_y": 0, "remainder": 0, "moved": False}
-
-            def touch_press(event):
-                gesture["active"] = True
-                gesture["last_y"] = event.y_root
-                gesture["remainder"] = 0
-                gesture["moved"] = False
-
-            def touch_move(event):
-                if not gesture["active"]:
-                    return
-
-                delta = event.y_root - gesture["last_y"]
-                gesture["last_y"] = event.y_root
-                gesture["remainder"] -= delta
-                if abs(gesture["remainder"]) >= 10:
-                    gesture["moved"] = True
-
-                # One canvas unit is 24 px. Keep the fractional remainder so
-                # slow swipes still move naturally instead of being ignored.
-                units = int(gesture["remainder"] / 24)
-                if units:
-                    gesture["remainder"] -= units * 24
-                    scroll_target.yview_scroll(units, "units")
-
-                if gesture["moved"]:
-                    return "break"
-
-            def touch_release(event):
-                was_drag = gesture["moved"]
-                gesture["active"] = False
-                gesture["remainder"] = 0
-                gesture["moved"] = False
-                if was_drag:
-                    return "break"
-
-            return touch_press, touch_move, touch_release
-
         def bind_main_wheel(widget):
             if widget == self.log_text:
                 return
@@ -1238,13 +2028,26 @@ class ChatGPTBatchApp:
 
         bind_main_touch(workspace)
 
-        log_touch_press, log_touch_move, log_touch_release = make_touch_scroll_handlers(self.log_text)
+        def clear_log_selection():
+            try:
+                self.log_text.tag_remove("sel", "1.0", "end")
+            except (AttributeError, tk.TclError):
+                pass
+
+        log_touch_press, log_touch_move, log_touch_release = make_touch_scroll_handlers(
+            self.log_text,
+            prevent_drag_selection=True,
+            prefer_pixel_scroll=True,
+            on_drag_start=clear_log_selection,
+        )
         self.log_text.bind("<ButtonPress-1>", log_touch_press, add="+")
         self.log_text.bind("<B1-Motion>", log_touch_move, add="+")
         self.log_text.bind("<ButtonRelease-1>", log_touch_release, add="+")
         self.log_text.bind("<MouseWheel>", scroll_log)
         self.log_text.bind("<Button-4>", scroll_log_linux)
         self.log_text.bind("<Button-5>", scroll_log_linux)
+
+        schedule_main_layout()
 
         if self.log_history:
             self.log_text.insert("end", "".join(self.log_history))
@@ -1256,7 +2059,7 @@ class ChatGPTBatchApp:
             self.retry_btn.config(state="disabled")
             self.force_btn.config(state="disabled")
 
-    def add_folder_row(self, parent, label, var, row):
+    def add_folder_row(self, parent, label, var, row, choose_command=None):
         c = self.colors
         row_pady = (6, 16) if row == 5 else 6
         ctk.CTkLabel(
@@ -1278,7 +2081,7 @@ class ChatGPTBatchApp:
         ctk.CTkButton(
             parent,
             text=self.t("choose"),
-            command=lambda: self.choose_folder(var),
+            command=choose_command or (lambda: self.choose_folder(var)),
             width=110,
             height=38,
             corner_radius=6,
@@ -1295,6 +2098,32 @@ class ChatGPTBatchApp:
         if folder:
             var.set(folder)
 
+    def choose_profile_folder(self):
+        if self.service_var.get() == "ChatGPT" and not self.can_change_chatgpt_account():
+            return
+
+        folder = filedialog.askdirectory()
+        if not folder:
+            return
+
+        if self.service_var.get() == "Google Gemini":
+            self.settings["gemini_profile_dir"] = folder
+            self.profile_var.set(folder)
+            return
+
+        account = self.get_active_chatgpt_account()
+        matching_account = next(
+            (item for item in self.settings["chatgpt_accounts"] if item["profile_dir"] == folder),
+            None,
+        )
+        if matching_account is not None:
+            self.settings["active_chatgpt_account_id"] = matching_account["id"]
+        else:
+            account["profile_dir"] = folder
+        self.profile_var.set(folder)
+        self.refresh_chatgpt_account_controls()
+        self.save_settings()
+
     def save_and_notify(self):
         # Saving settings is an explicit user action.  Do not let a pending
         # automatic restart race it, even if none of the fields changed.
@@ -1307,17 +2136,27 @@ class ChatGPTBatchApp:
         return bool(auto_next_var.get()) if auto_next_var is not None else False
 
     def get_auto_next_delay_seconds(self):
-        minutes = float(self.auto_next_delay_var.get().strip())
-        if not math.isfinite(minutes) or minutes <= 0:
-            raise ValueError
-        return max(1, round(minutes * 60))
+        return DesktopController.parse_auto_next_delay(self.auto_next_delay_var.get())
+
+    def sync_auto_next_configuration(self):
+        try:
+            delay_seconds = self.get_auto_next_delay_seconds()
+        except (AttributeError, TypeError, ValueError):
+            delay_seconds = None
+        self.controller.configure_auto_next(self.auto_next_is_enabled(), delay_seconds)
 
     def on_run_configuration_changed(self, *_):
-        if self.proc and self.proc.poll() is None:
-            self.current_run_intervened = True
-        self.cancel_auto_next()
+        if getattr(self, "_internal_account_update", False):
+            return
+        self.sync_auto_next_configuration()
+        self.controller.mark_run_configuration_changed()
+        self.render_controller_events()
 
     def on_auto_next_toggle(self):
+        self.on_run_configuration_changed()
+        self.save_settings()
+
+    def on_account_fallback_toggle(self):
         self.on_run_configuration_changed()
         self.save_settings()
 
@@ -1331,155 +2170,35 @@ class ChatGPTBatchApp:
             frame.grid_remove()
 
     def cancel_auto_next(self, announce=False):
-        active = self.auto_next_deadline is not None or self.auto_next_after_id is not None
-        self.auto_next_token += 1
-        if self.auto_next_after_id is not None:
-            try:
-                self.root.after_cancel(self.auto_next_after_id)
-            except Exception:
-                pass
-        self.auto_next_after_id = None
-        self.auto_next_deadline = None
-
-        countdown_var = getattr(self, "auto_next_countdown_var", None)
-        if countdown_var is not None:
-            countdown_var.set("")
-        self.set_auto_next_controls_visible(False)
-
-        if active and announce:
-            self.status_var.set(self.t("auto_cancelled"))
-            self.log(f"\n=== {self.t('auto_cancelled')} ===\n")
+        active = self.controller.cancel_auto_next(announce=announce)
+        self.render_controller_events()
         return active
 
     def schedule_auto_next(self):
-        try:
-            delay_seconds = self.get_auto_next_delay_seconds()
-        except (TypeError, ValueError):
-            self.status_var.set(self.t("process_done"))
-            messagebox.showerror(self.t("error_title"), self.t("invalid_auto_next_delay"))
-            return False
-
-        self.cancel_auto_next()
-        self.auto_next_token += 1
-        token = self.auto_next_token
-        self.auto_next_deadline = time.monotonic() + delay_seconds
-        self.set_auto_next_controls_visible(True)
-        batch_size = self.current_batch_result.get("requested_batch_size", "?")
-        self.log(f"\n{self.t('auto_scheduled_log', count=batch_size, seconds=delay_seconds)}\n")
-        self.update_auto_next_countdown(token)
-        return True
+        self.sync_auto_next_configuration()
+        scheduled = self.controller.schedule_auto_next()
+        self.render_controller_events()
+        return scheduled
 
     def update_auto_next_countdown(self, token):
-        if token != self.auto_next_token or self.auto_next_deadline is None:
-            return
-
-        remaining = max(0, int(self.auto_next_deadline - time.monotonic() + 0.999))
-        formatted = f"{remaining // 60:02d}:{remaining % 60:02d}"
-        message = self.t("auto_countdown", time=formatted)
-        self.status_var.set(message)
-        self.auto_next_countdown_var.set(message)
-
-        if remaining > 0:
-            self.auto_next_after_id = self.root.after(
-                1000,
-                lambda: self.update_auto_next_countdown(token),
-            )
-            return
-
-        self.auto_next_after_id = None
-        self.auto_next_deadline = None
-        self.set_auto_next_controls_visible(False)
-        if self.auto_next_is_enabled() and not (self.proc and self.proc.poll() is None):
-            self.log(f"\n{self.t('auto_running_log')}\n")
-            self.start("main", auto_started=True)
+        self.controller.update_auto_next_countdown(token)
+        self.render_controller_events()
 
     def run_auto_next_now(self):
-        if self.auto_next_deadline is None:
-            return
-        self.cancel_auto_next()
-        self.log(f"\n{self.t('auto_running_log')}\n")
-        self.start("main", auto_started=True)
+        self.controller.run_auto_next_now()
+        self.render_controller_events()
 
     def handle_worker_output(self, text):
-        if text.startswith(BATCH_RESULT_PREFIX):
-            try:
-                result = json.loads(text[len(BATCH_RESULT_PREFIX):].strip())
-                if not isinstance(result, dict):
-                    raise ValueError("Batch result is not an object")
-                self.current_batch_result = result
-                self.log("\n" + self.t(
-                    "batch_result_log",
-                    success=result.get("success_count", 0),
-                    selected=result.get("selected_count", 0),
-                    failed=result.get("failure_count", 0),
-                ) + "\n")
-                return
-            except (json.JSONDecodeError, ValueError):
-                pass
-        self.log(text)
+        self.controller.handle_worker_output(text)
+        self.render_controller_events()
 
     def get_auto_next_skip_reason(self, exit_code):
-        if not self.auto_next_is_enabled() or self.current_run_mode != "main":
-            return None
-        if self.current_run_intervened:
-            return "auto_skip_intervened", {}
-        if exit_code != 0:
-            return "auto_skip_process_error", {"code": exit_code}
-
-        result = self.current_batch_result
-        if not result:
-            return "auto_skip_missing_result", {}
-        if result.get("job", {}).get("state") in ("complete", "needs_retry"):
-            return "auto_skip_no_more", {}
-
-        try:
-            selected = int(result.get("selected_count", 0))
-            requested = int(result.get("requested_batch_size", 0))
-            completed = int(result.get("completed_count", 0))
-            succeeded = int(result.get("success_count", 0))
-            failed = int(result.get("failure_count", 0))
-            next_pending = int(result.get("next_pending_count", 0))
-        except (TypeError, ValueError):
-            return "auto_skip_missing_result", {}
-
-        if requested < 1 or selected != requested:
-            return "auto_skip_incomplete", {"count": requested}
-        if completed != selected or succeeded != selected or failed:
-            return "auto_skip_failed", {}
-        if next_pending < 1:
-            return "auto_skip_no_more", {}
-        return "", {}
+        self.sync_auto_next_configuration()
+        return self.controller.get_auto_next_skip_reason(exit_code)
 
     def handle_process_done(self, exit_code):
-        self.proc = None
-        self.manual_action_required = False
-        self.start_btn.config(state="normal")
-        self.retry_btn.config(state="normal")
-        self.force_btn.config(state="normal")
-        self.continue_btn.config(state="disabled")
-
-        job = (self.current_batch_result or {}).get("job", {})
-        if exit_code == 0 and job.get("state") == "complete":
-            self.cancel_auto_next()
-            message = f"Job hoàn tất: {job['done']}/{job['total']} ảnh. Exit code: 0."
-            self.status_var.set(message)
-            self.log(f"\n=== {message} ===\n")
-            return
-        if exit_code == 2 and job.get("state") == "needs_retry":
-            self.cancel_auto_next()
-            message = f"Job đã dừng: còn {job['failed']} ảnh cần chạy lại. Exit code: 2."
-            self.status_var.set(message)
-            self.log(f"\n=== {message} ===\n")
-            return
-
-        reason, values = self.get_auto_next_skip_reason(exit_code) or (None, {})
-        if reason == "":
-            if self.schedule_auto_next():
-                return
-        elif reason is not None:
-            self.log(f"\n{self.t(reason, **values)}\n")
-
-        self.status_var.set(self.t("process_done"))
+        self.controller.handle_process_done(exit_code)
+        self.render_controller_events()
 
     def start(self, mode, auto_started=False):
         if self.proc and self.proc.poll() is None:
@@ -1496,13 +2215,14 @@ class ChatGPTBatchApp:
             )
             return
 
-        try:
-            batch_size = int(self.batch_var.get().strip())
-            if batch_size < 1:
-                raise ValueError
-        except ValueError:
-            messagebox.showerror(self.t("error_title"), self.t("invalid_batch_size"))
-            return
+        if mode != "login":
+            try:
+                batch_size = int(self.batch_var.get().strip())
+                if batch_size < 1:
+                    raise ValueError
+            except ValueError:
+                messagebox.showerror(self.t("error_title"), self.t("invalid_batch_size"))
+                return
 
         if mode == "main" and self.auto_next_is_enabled():
             try:
@@ -1517,6 +2237,9 @@ class ChatGPTBatchApp:
 
         service_map = {"ChatGPT": "chatgpt", "Google Gemini": "gemini", "chatgpt": "chatgpt", "gemini": "gemini"}
         service_val = service_map.get(self.service_var.get(), "chatgpt")
+        if mode == "login" and service_val != "chatgpt":
+            messagebox.showerror(self.t("error_title"), self.t("chatgpt_account"))
+            return
         profile_dir = self.profile_var.get().strip()
         if not profile_dir:
             if service_val == "gemini":
@@ -1527,167 +2250,206 @@ class ChatGPTBatchApp:
 
         self.save_settings()
 
-        env = os.environ.copy()
-        env["IMAGE_FOLDER"] = self.image_var.get()
-        env["DOWNLOAD_FOLDER"] = self.output_var.get()
-        env["PROFILE_DIR"] = self.profile_var.get()
-        env["BATCH_SIZE"] = self.batch_var.get()
-        env["START_FROM"] = self.start_from_var.get()
-        env["RUN_MODE"] = mode
-        env["SERVICE"] = service_val
-        env["PYTHONIOENCODING"] = "utf-8"
-        env["PYTHONUTF8"] = "1"
-        env["PYTHONUNBUFFERED"] = "1"
-        browser_path = APP_DIR / "ms-playwright"
-        if getattr(sys, "frozen", False) or browser_path.exists():
-            env["PLAYWRIGHT_BROWSERS_PATH"] = str(browser_path)
-
-        # Some Python installations keep sqlite3.dll in DLLs rather than next
-        # to python.exe. The worker is a fresh process, so make both locations
-        # visible to Windows' DLL loader before starting it.
-        if os.name == "nt":
-            python_dir = Path(sys.executable).resolve().parent
-            dll_dirs = [APP_DIR, python_dir, python_dir / "DLLs"]
-            existing_path = env.get("PATH", "")
-            env["PATH"] = os.pathsep.join(
-                [str(path) for path in dll_dirs if path.exists()] + [existing_path]
-            )
-
-        self.current_done = 0
-        self.current_total = 0
-        self.manual_action_required = False
-        self.current_run_mode = mode
-        self.current_run_intervened = False
-        self.current_batch_result = None
-        self.progress_var.set(0)
-        self.progress_label.set(self.t("progress_zero"))
-
-        self.log(f"\n{self.t('log_start', mode=mode.upper())}\n")
-        self.status_var.set(self.t("status_running"))
-        self.start_btn.config(state="disabled")
-        self.retry_btn.config(state="disabled")
-        self.force_btn.config(state="disabled")
-        self.continue_btn.config(state="disabled")
-
-        creationflags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
-
-        if getattr(sys, "frozen", False):
-            command = [sys.executable, "--worker"]
-        else:
-            command = [sys.executable, "-u", str(SCRIPT_FILE)]
-
-        self.proc = subprocess.Popen(
-            command,
-            cwd=str(APP_DIR),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            stdin=subprocess.PIPE,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            env=env,
-            bufsize=1,
-            creationflags=creationflags
-        )
-
-        threading.Thread(
-            target=self.read_process_output,
-            args=(self.proc,),
-            daemon=True,
-        ).start()
-
-    def read_process_output(self, proc):
         try:
-            for line in proc.stdout:
-                self.log_queue.put(("line", line))
-        except Exception as e:
-            self.log_queue.put(("line", f"\n{self.t('log_read_error', error=e)}\n"))
-        finally:
-            code = proc.wait()
-            self.log_queue.put(("line", f"\n=== KẾT THÚC, EXIT CODE: {code} ===\n"))
-            self.log_queue.put(("done", code))
+            auto_next_delay = self.get_auto_next_delay_seconds() if self.auto_next_is_enabled() else None
+        except (TypeError, ValueError):
+            # Only main mode validates this field. Other modes keep their old
+            # behavior and simply cannot schedule an automatic main run.
+            auto_next_delay = None
+        self.controller.configure_auto_next(self.auto_next_is_enabled(), auto_next_delay)
+        launch = build_process_launch(
+            self.settings,
+            mode,
+            app_dir=APP_DIR,
+            executable=sys.executable,
+            frozen=bool(getattr(sys, "frozen", False)),
+        )
+        if not self.controller.start(mode, launch, auto_started=auto_started):
+            messagebox.showwarning(self.t("running_title"), self.t("running_message"))
+            return
+        self.render_controller_events()
 
-    def poll_log_queue(self):
+    def poll_controller_events(self):
+        self.render_controller_events()
+        self.root.after(200, self.poll_controller_events)
+
+    def render_controller_events(self):
+        if getattr(self, "_rendering_controller_events", False):
+            return
+        self._rendering_controller_events = True
         try:
             while True:
-                msg = self.log_queue.get_nowait()
+                events = self.controller.drain_events()
+                if not events:
+                    break
+                for event in events:
+                    self.handle_controller_event(event)
+        finally:
+            self._rendering_controller_events = False
 
-                if isinstance(msg, tuple) and msg[0] == "done":
-                    self.handle_process_done(msg[1])
-                elif isinstance(msg, tuple) and msg[0] == "line":
-                    self.handle_worker_output(msg[1])
-                else:
-                    self.handle_worker_output(msg)
+    def handle_controller_event(self, event):
+        event_type = event.type
+        data = event.data
 
-        except queue.Empty:
-            pass
-
-        self.root.after(200, self.poll_log_queue)
-
-    def log(self, text):
-        self.log_history.append(text)
-        self.log_text.insert("end", text)
-        self.log_text.see("end")
-        self.update_progress_from_log(text)
-        self.update_manual_button_from_log(text)
-
-    def update_manual_button_from_log(self, text):
-        if "MANUAL_ACTION_REQUIRED" in text:
-            self.manual_action_required = True
+        if event_type == "log_appended":
+            self.log_text.insert("end", data["text"])
+            self.log_text.see("end")
+        elif event_type == "log_cleared":
+            self.log_text.delete("1.0", "end")
+        elif event_type == "progress_changed":
+            done = data["done"]
+            total = data["total"]
+            percent = done / max(total, 1) * 100 if total else 0
+            self.progress_var.set(percent)
+            if data.get("reset"):
+                self.progress_label.set(self.t("progress_count", done=done, total=total))
+            elif total:
+                self.progress_label.set(self.t("progress_percent", done=done, total=total, percent=percent))
+            else:
+                self.progress_label.set(self.t("progress_zero"))
+        elif event_type == "manual_action_required":
             self.status_var.set(self.t("manual_wait"))
             self.continue_btn.config(state="normal")
+        elif event_type == "process_started":
+            self.log(f"\n{self.t('log_start', mode=data['mode'].upper())}\n")
+            self.status_var.set(self.t("status_running"))
+            self.start_btn.config(state="disabled")
+            self.retry_btn.config(state="disabled")
+            self.force_btn.config(state="disabled")
+            self.continue_btn.config(state="disabled")
+        elif event_type == "process_completed":
+            self.start_btn.config(state="normal")
+            self.retry_btn.config(state="normal")
+            self.force_btn.config(state="normal")
+            self.continue_btn.config(state="disabled")
+        elif event_type == "batch_result":
+            result = data["result"]
+            self.log("\n" + self.t(
+                "batch_result_log",
+                success=result.get("success_count", 0),
+                selected=result.get("selected_count", 0),
+                failed=result.get("failure_count", 0),
+            ) + "\n")
+        elif event_type == "account_event":
+            self.render_account_event(data["event"])
+        elif event_type == "reader_error":
+            self.log(f"\n{self.t('log_read_error', error=data['error'])}\n")
+        elif event_type == "continue_sent":
+            self.continue_btn.config(state="disabled")
+            self.status_var.set(self.t("continue_sent"))
+            self.log(f"\n{self.t('log_continue_sent')}\n")
+        elif event_type == "continue_error":
+            messagebox.showerror(self.t("error_title"), self.t("continue_error", error=data["error"]))
+        elif event_type == "stopped":
+            self.status_var.set(self.t("stopped"))
+            self.log(f"\n{self.t('log_stopped')}\n")
+        elif event_type == "no_process":
+            self.status_var.set(self.t("no_process"))
+        elif event_type == "auto_next_cancelled":
+            countdown_var = getattr(self, "auto_next_countdown_var", None)
+            if countdown_var is not None:
+                countdown_var.set("")
+            self.set_auto_next_controls_visible(False)
+            if data["active"] and data["announce"]:
+                self.status_var.set(self.t("auto_cancelled"))
+                self.log(f"\n=== {self.t('auto_cancelled')} ===\n")
+        elif event_type == "auto_next_scheduled":
+            self.set_auto_next_controls_visible(True)
+            self.log(f"\n{self.t('auto_scheduled_log', count=data['count'], seconds=data['seconds'])}\n")
+        elif event_type == "auto_next_tick":
+            remaining = data["remaining"]
+            formatted = f"{remaining // 60:02d}:{remaining % 60:02d}"
+            message = self.t("auto_countdown", time=formatted)
+            self.status_var.set(message)
+            self.auto_next_countdown_var.set(message)
+            if remaining == 0:
+                self.set_auto_next_controls_visible(False)
+        elif event_type == "auto_next_running":
+            self.log(f"\n{self.t('auto_running_log')}\n")
+        elif event_type == "auto_next_start_requested":
+            # Rebuild the launch environment from the current presentation
+            # state so a worker-side account switch carries into the next run.
+            self.start("main", auto_started=True)
+        elif event_type == "auto_next_recovered":
+            self.log("\n" + self.t("auto_recover_after_worker_exit", code=data["code"]) + "\n")
+        elif event_type == "auto_next_skipped":
+            self.log(f"\n{self.t(data['reason'], **data['values'])}\n")
+        elif event_type == "invalid_auto_next_delay":
+            self.status_var.set(self.t("process_done"))
+            messagebox.showerror(self.t("error_title"), self.t("invalid_auto_next_delay"))
+        elif event_type == "process_outcome":
+            self.render_process_outcome(data)
+
+    def render_account_event(self, event):
+        event_name = event.get("event")
+        if event_name == "account_quota_exhausted":
+            self.log("\n" + self.t("account_quota_log", name=event.get("account_name", "ChatGPT")) + "\n")
+        elif event_name == "account_switched":
+            self.set_worker_active_account(event.get("account_id"))
+            self.log("\n" + self.t(
+                "account_switched_log",
+                name=event.get("account_name", "ChatGPT"),
+                image=event.get("image", ""),
+            ) + "\n")
+        elif event_name == "account_skipped":
+            self.log("\n" + self.t(
+                "account_skipped_log",
+                name=event.get("account_name", "ChatGPT"),
+                reason=event.get("reason", ""),
+            ) + "\n")
+        elif event_name == "job_waiting":
+            self.status_var.set(self.t("account_waiting_status"))
+            self.log("\n" + self.t(
+                "account_waiting_log",
+                reason=event.get("reason", ""),
+                image=event.get("image", ""),
+            ) + "\n")
+
+    def render_process_outcome(self, data):
+        outcome = data["outcome"]
+        exit_code = data["exit_code"]
+        job = data.get("job", {})
+        if outcome == "login":
+            if exit_code == 0:
+                self.status_var.set(self.t("login_ready"))
+                self.log(f"\n{self.t('login_ready_log')}\n")
+            else:
+                self.status_var.set(self.t("process_done"))
+        elif outcome == "complete":
+            message = f"Job hoàn tất: {job['done']}/{job['total']} ảnh. Exit code: 0."
+            self.status_var.set(message)
+            self.log(f"\n=== {message} ===\n")
+        elif outcome == "waiting_quota":
+            message = f"Batch tạm dừng: {job.get('waiting_reason', '')}. Ảnh đang dở: {job.get('waiting_image', '')}."
+            self.status_var.set(self.t("account_waiting_status"))
+            self.log(f"\n=== {message} ===\n")
+        elif outcome == "needs_retry":
+            message = f"Job đã dừng: còn {job['failed']} ảnh cần chạy lại. Exit code: 2."
+            self.status_var.set(message)
+            self.log(f"\n=== {message} ===\n")
+        else:
+            self.status_var.set(self.t("process_done"))
+
+    def log(self, text):
+        self.controller.append_log(text)
+        if not getattr(self, "_rendering_controller_events", False):
+            self.render_controller_events()
+
+    def update_manual_button_from_log(self, text):
+        self.controller._update_manual_state_from_log(text)
+        self.render_controller_events()
 
     def update_progress_from_log(self, text):
-        if "📌 Batch lần này:" in text:
-            try:
-                self.current_total = int(text.split(":")[-1].strip().split()[0])
-                self.current_done = 0
-                self.progress_var.set(0)
-                self.progress_label.set(self.t("progress_count", done=0, total=self.current_total))
-            except Exception:
-                pass
-
-        if "✓ DONE" in text or "✗ Lỗi:" in text:
-            self.current_done += 1
-            total = max(self.current_total, 1)
-            percent = self.current_done / total * 100
-            self.progress_var.set(percent)
-            self.progress_label.set(self.t("progress_percent", done=self.current_done, total=total, percent=percent))
+        self.controller._update_progress_from_log(text)
+        self.render_controller_events()
 
     def send_continue(self):
-        if self.proc and self.proc.poll() is None:
-            try:
-                self.proc.stdin.write("\n")
-                self.proc.stdin.flush()
-                self.current_run_intervened = True
-                self.manual_action_required = False
-                self.continue_btn.config(state="disabled")
-                self.status_var.set(self.t("continue_sent"))
-                self.log(f"\n{self.t('log_continue_sent')}\n")
-            except Exception as e:
-                messagebox.showerror(self.t("error_title"), self.t("continue_error", error=e))
+        self.controller.send_continue()
+        self.render_controller_events()
 
     def stop(self):
-        cancelled_auto_run = self.cancel_auto_next(announce=True)
-        if self.proc and self.proc.poll() is None:
-            pid = self.proc.pid
-            self.current_run_intervened = True
-
-            if os.name == "nt":
-                subprocess.run(
-                    ["taskkill", "/PID", str(pid), "/T", "/F"],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    creationflags=subprocess.CREATE_NO_WINDOW
-                )
-            else:
-                self.proc.terminate()
-
-            self.status_var.set(self.t("stopped"))
-            self.manual_action_required = False
-            self.log(f"\n{self.t('log_stopped')}\n")
-        elif not cancelled_auto_run:
-            self.status_var.set(self.t("no_process"))
+        self.controller.stop()
+        self.render_controller_events()
 
     def open_output(self):
         folder = self.output_var.get()
@@ -1753,22 +2515,23 @@ class ChatGPTBatchApp:
         messagebox.showinfo("OK", self.t("copy_log_message"))
 
     def clear_log(self):
-        self.log_history.clear()
-        self.log_text.delete("1.0", "end")
+        self.controller.clear_log()
+        self.render_controller_events()
 
     def on_close(self):
-        self.cancel_auto_next()
-        if self.proc and self.proc.poll() is None:
-            self.stop()
+        self.controller.shutdown()
         self.root.destroy()
 
 
-if __name__ == "__main__":
+def run_tk_app():
     enable_windows_dpi_awareness()
-    if "--worker" in sys.argv:
-        run_packaged_worker()
-        raise SystemExit(0)
-
     root = ctk.CTk()
     app = ChatGPTBatchApp(root)
     root.mainloop()
+
+
+if __name__ == "__main__":
+    if _LAUNCH_MODE == "worker":
+        run_packaged_worker()
+    else:
+        run_tk_app()

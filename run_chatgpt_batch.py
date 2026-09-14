@@ -5,7 +5,9 @@ import csv
 import json
 import base64
 import functools
+import html
 import tempfile
+import unicodedata
 from io import BytesIO
 from pathlib import Path
 from datetime import datetime
@@ -46,8 +48,17 @@ DEFAULT_CONFIG = {
     "download_folder": str(DATA_DIR / "images_vn"),
     "profile_dir": str(DATA_DIR / "chatgpt_auto_profile"),
     "batch_size": "10",
-    "start_from": ""
+    "start_from": "",
+    "chatgpt_accounts": [],
+    "active_chatgpt_account_id": "",
+    "auto_account_fallback_enabled": True,
 }
+
+
+def parse_bool(value):
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() not in {"", "0", "false", "no", "off"}
 
 
 def load_config():
@@ -67,6 +78,12 @@ def load_config():
     cfg["run_mode"] = os.getenv("RUN_MODE", "main")
     cfg["start_from"] = os.getenv("START_FROM", cfg.get("start_from", "")).strip()
     cfg["service"] = os.getenv("SERVICE", cfg.get("service", "chatgpt")).strip().lower()
+    cfg["auto_account_fallback_enabled"] = parse_bool(
+        os.getenv(
+            "AUTO_ACCOUNT_FALLBACK_ENABLED",
+            cfg.get("auto_account_fallback_enabled", True),
+        )
+    )
 
     if not cfg["profile_dir"]:
         if cfg["service"] == "gemini":
@@ -75,6 +92,69 @@ def load_config():
             cfg["profile_dir"] = str(DATA_DIR / "chatgpt_auto_profile")
 
     return cfg
+
+
+def normalize_chatgpt_accounts(raw_accounts, legacy_profile_dir=""):
+    """Return stable, deduplicated account records without credentials."""
+    accounts = []
+    seen_ids = set()
+    seen_profiles = set()
+
+    if isinstance(raw_accounts, list):
+        for raw in raw_accounts:
+            if not isinstance(raw, dict):
+                continue
+            account_id = str(raw.get("id", "")).strip()
+            name = str(raw.get("name", "")).strip()
+            profile_dir = str(raw.get("profile_dir", "")).strip()
+            if not account_id or not name or not profile_dir:
+                continue
+            normalized_profile = os.path.normcase(os.path.abspath(profile_dir))
+            if account_id in seen_ids or normalized_profile in seen_profiles:
+                continue
+            accounts.append({
+                "id": account_id,
+                "name": name,
+                "profile_dir": profile_dir,
+            })
+            seen_ids.add(account_id)
+            seen_profiles.add(normalized_profile)
+
+    legacy_profile_dir = str(legacy_profile_dir or "").strip()
+    if not accounts and legacy_profile_dir:
+        accounts.append({
+            "id": "default",
+            "name": "ChatGPT 1",
+            "profile_dir": legacy_profile_dir,
+        })
+
+    if not accounts:
+        accounts.append({
+            "id": "default",
+            "name": "ChatGPT 1",
+            "profile_dir": str(DATA_DIR / "chatgpt_auto_profile"),
+        })
+
+    return accounts
+
+
+def get_chatgpt_accounts():
+    accounts = normalize_chatgpt_accounts(
+        CFG.get("chatgpt_accounts"),
+        legacy_profile_dir=PROFILE_DIR,
+    )
+    active_id = str(CFG.get("active_chatgpt_account_id", "")).strip()
+    active = next((item for item in accounts if item["id"] == active_id), None)
+    if active is None:
+        normalized_profile = os.path.normcase(os.path.abspath(PROFILE_DIR))
+        active = next(
+            (
+                item for item in accounts
+                if os.path.normcase(os.path.abspath(item["profile_dir"])) == normalized_profile
+            ),
+            accounts[0],
+        )
+    return [active] + [item for item in accounts if item["id"] != active["id"]]
 
 
 CFG = load_config()
@@ -87,8 +167,9 @@ RUN_MODE = CFG["run_mode"]
 START_FROM = CFG["start_from"]
 SERVICE = CFG.get("service", "chatgpt")
 BATCH_RESULT_PREFIX = "__BATCH_RESULT__="
+ACCOUNT_EVENT_PREFIX = "__ACCOUNT_EVENT__="
 
-WAIT_AFTER_EACH_IMAGE = 30
+WAIT_AFTER_EACH_IMAGE = 10
 MAX_RETRY_IMAGE = 3
 MAX_RETRY_DICH = 3
 IMAGE_WAIT_TIMEOUT = 1800
@@ -98,8 +179,28 @@ PROMPT_CHEP_LAI = "chép lại nguyên văn"
 PROMPT_DICH = "dịch bản chép lại"
 PROMPT_TAO_ANH = "Tạo ảnh với bản dịch"
 
+IMAGE_QUOTA_MARKERS = (
+    "Bạn đã hết lượt tạo hình ảnh",
+    "Bạn hiện đã hết lượt tạo ảnh",
+    "Bạn đã đạt giới hạn yêu cầu tạo ảnh",
+    "You've run out of image generations",
+    "You have run out of image generations",
+    "You've reached the image generation limit",
+    "You have reached the image generation limit",
+    "You've reached your image generation limit",
+    "You have reached your image generation limit",
+)
+
 IMAGE_EXTS = [".png", ".jpg", ".jpeg", ".webp"]
 PROGRESS_FILE = os.path.join(DOWNLOAD_FOLDER, "progress.csv")
+
+
+class QuotaExhaustedError(RuntimeError):
+    """The active ChatGPT account cannot generate another image right now."""
+
+    def __init__(self, evidence):
+        self.evidence = str(evidence or "").strip()
+        super().__init__("Tài khoản ChatGPT đã hết lượt tạo ảnh")
 
 
 def sleep(s):
@@ -109,7 +210,7 @@ def sleep(s):
 def ensure_dirs():
     if not Path(IMAGE_FOLDER).is_dir():
         raise ValueError(f"Không tìm thấy thư mục ảnh gốc: {IMAGE_FOLDER}. Hãy chọn lại thư mục ảnh gốc.")
-    os.makedirs(DATA_DIR, exist_ok=True)
+    ensure_profile_dir()
     try:
         os.makedirs(DOWNLOAD_FOLDER, exist_ok=True)
         # Fail before uploading or generating if the chosen destination is unwritable.
@@ -118,6 +219,10 @@ def ensure_dirs():
             probe.flush()
     except OSError as exc:
         raise OSError(f"Không ghi được vào thư mục ảnh VN: {DOWNLOAD_FOLDER}: {exc}") from exc
+
+
+def ensure_profile_dir():
+    os.makedirs(DATA_DIR, exist_ok=True)
     os.makedirs(PROFILE_DIR, exist_ok=True)
 
 
@@ -252,6 +357,78 @@ def write_progress(index, file_name, output_name, status, note=""):
         ])
 
 
+def checkpoint_path():
+    return Path(DOWNLOAD_FOLDER) / "job_checkpoint.json"
+
+
+def source_fingerprint(img):
+    try:
+        stat = Path(img).stat()
+        return f"{stat.st_size}:{stat.st_mtime_ns}"
+    except OSError:
+        return "missing"
+
+
+def write_job_checkpoint(
+    *,
+    job_id,
+    mode,
+    images,
+    batch,
+    position,
+    current_image,
+    active_account,
+    stage,
+    state,
+    account_states,
+):
+    """Atomically persist the unfinished batch without storing credentials."""
+    payload = {
+        "version": 1,
+        "job_id": job_id,
+        "batch_id": f"{job_id}:{mode}",
+        "mode": mode,
+        "images": [img.name for img in images],
+        "batch": [img.name for img in batch],
+        "position": position,
+        "current_image": current_image,
+        "source_fingerprints": {
+            img.name: source_fingerprint(img) for img in batch
+        },
+        "output_folder": str(Path(DOWNLOAD_FOLDER).resolve()),
+        "prompt_version": {
+            "copy": PROMPT_CHEP_LAI,
+            "translate": PROMPT_DICH,
+            "generate": PROMPT_TAO_ANH,
+        },
+        "active_account": dict(active_account or {}),
+        "stage": stage,
+        "account_states": dict(account_states or {}),
+        "state": state,
+        "updated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+    }
+    destination = checkpoint_path()
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    handle, temporary = tempfile.mkstemp(
+        prefix="job_checkpoint_",
+        suffix=".part",
+        dir=str(destination.parent),
+        text=True,
+    )
+    try:
+        with os.fdopen(handle, "w", encoding="utf-8") as stream:
+            json.dump(payload, stream, ensure_ascii=False, indent=2)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, destination)
+    except Exception:
+        try:
+            os.unlink(temporary)
+        except OSError:
+            pass
+        raise
+
+
 def output_file_exists(img):
     try:
         output_name = get_output_name(img)
@@ -321,14 +498,20 @@ def finish_batch_result(result, images):
     result["job"] = {key: value for key, value in job.items() if key != "pending_files"}
     result["next_pending_count"] = job["pending"]
     code = 0
-    if result.get("failure_count") or job["state"] == "needs_retry":
+    if result.get("waiting_quota"):
+        result["job"]["state"] = "waiting_quota"
+        result["job"]["waiting_reason"] = result.get("waiting_reason", "")
+        result["job"]["waiting_image"] = result.get("waiting_image", "")
+        code = 4
+    elif result.get("failure_count") or job["state"] == "needs_retry":
         code = 2
     elif (result["mode"] == "main" and result["selected_count"] and
           job["pending"] >= result["pending_before"]):
         code = 3
     result["exit_code"] = code
+    display_state = result["job"].get("state", job["state"])
     print(f"Job: {job['done']}/{job['total']} ảnh hợp lệ; "
-          f"{job['pending']} chờ xử lý; {job['failed']} cần chạy lại; {job['state']}")
+          f"{job['pending']} chờ xử lý; {job['failed']} cần chạy lại; {display_state}")
     emit_batch_result(result)
     return code
 
@@ -486,6 +669,109 @@ def login_if_needed(page, service=SERVICE):
     wait_if_cloudflare(page)
     if not wait_page_ready(page, 90):
         raise Exception(f"{service.upper()} chưa sẵn sàng sau khi đăng nhập.")
+
+
+def launch_persistent_context(playwright, profile_dir):
+    return playwright.chromium.launch_persistent_context(
+        user_data_dir=profile_dir,
+        headless=False,
+        accept_downloads=True,
+        args=[
+            "--disable-blink-features=AutomationControlled"
+        ],
+        viewport={"width": 1400, "height": 900}
+    )
+
+
+def has_signin_prompt(page):
+    selectors = [
+        'a:has-text("Log in")',
+        'button:has-text("Log in")',
+        'a:has-text("Đăng nhập")',
+        'button:has-text("Đăng nhập")',
+    ]
+    for selector in selectors:
+        try:
+            locator = page.locator(selector).first
+            if locator.count() > 0 and locator.is_visible():
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def wait_existing_chatgpt_session(page, timeout=30):
+    """Check a prepared profile without pausing for manual login."""
+    start = time.time()
+    while time.time() - start < timeout:
+        if is_cloudflare(page) or has_signin_prompt(page):
+            return False
+
+        try:
+            prompt = get_prompt_locator(page)
+            if prompt.count() > 0 and prompt.first.is_visible():
+                return True
+        except Exception:
+            pass
+
+        sleep(1)
+    return False
+
+
+def open_existing_chatgpt_account(playwright, account):
+    """Open a fallback profile only when it is already signed in."""
+    profile_dir = account["profile_dir"]
+    context = None
+    try:
+        os.makedirs(profile_dir, exist_ok=True)
+        context = launch_persistent_context(playwright, profile_dir)
+        page = context.pages[0] if context.pages else context.new_page()
+        page.goto("https://chatgpt.com/", wait_until="domcontentloaded")
+        if wait_existing_chatgpt_session(page):
+            minimize_own_browser(context)
+            return context, page
+        print(f"⚠ Bỏ qua {account['name']}: profile chưa đăng nhập hoặc chưa sẵn sàng")
+    except Exception as exc:
+        print(f"⚠ Bỏ qua {account['name']}: không mở được phiên ({type(exc).__name__})")
+
+    if context is not None:
+        try:
+            context.close()
+        except Exception:
+            pass
+    return None, None
+
+
+def emit_account_event(event, **payload):
+    data = {"event": event, **payload}
+    print(ACCOUNT_EVENT_PREFIX + json.dumps(data, ensure_ascii=False, sort_keys=True))
+
+
+def login_only():
+    """Open the selected persistent profile so the user can sign in safely."""
+    ensure_profile_dir()
+    print(f"🔐 Mở phiên đăng nhập {SERVICE.upper()}.")
+
+    with sync_playwright() as p:
+        context = None
+        try:
+            context = p.chromium.launch_persistent_context(
+                user_data_dir=PROFILE_DIR,
+                headless=False,
+                accept_downloads=True,
+                args=[
+                    "--disable-blink-features=AutomationControlled"
+                ],
+                viewport={"width": 1400, "height": 900}
+            )
+            page = context.pages[0] if context.pages else context.new_page()
+            # Keep this browser visible: the user needs it to complete sign-in.
+            login_if_needed(page)
+            print(f"✅ Phiên {SERVICE.upper()} đã sẵn sàng.")
+        finally:
+            if context is not None:
+                context.close()
+    return 0
 
 
 def reset_chat(page, service=SERVICE):
@@ -1131,8 +1417,11 @@ def get_assistant_response_signature(page):
                 ));
                 let nodes = Array.from(document.querySelectorAll(
                     '[data-message-author-role="assistant"], [data-testid*="assistant" i], ' +
-                    'message-content, .message-content, .model-response-text'
-                )).filter((node) => !isUserNode(node));
+                    'message-content, .message-content, .model-response-text, ' +
+                    '[data-testid^="conversation-turn-"]'
+                )).filter((node) => !isUserNode(node) && !node.querySelector(
+                    '[data-message-author-role="user"], [data-testid*="user" i], user-query, .user-query, .user-message'
+                ));
 
                 if (nodes.length === 0) {
                     nodes = Array.from(document.querySelectorAll('.markdown, .message-content')).filter((node) => {
@@ -1188,6 +1477,89 @@ def has_new_assistant_response(page, before_signature):
             return True
 
     return False
+
+
+def normalize_notice_text(value):
+    """Normalize visible ChatGPT text while preserving Vietnamese accents."""
+    text = html.unescape(str(value or ""))
+    text = unicodedata.normalize("NFC", text).replace("\u00a0", " ")
+    return " ".join(text.split()).casefold()
+
+
+def find_image_quota_marker(text):
+    normalized = normalize_notice_text(text)
+    for marker in IMAGE_QUOTA_MARKERS:
+        normalized_marker = normalize_notice_text(marker)
+        if normalized_marker in normalized:
+            return marker
+    return None
+
+
+def get_generation_notice_texts(page, before_signature=None):
+    """Read assistant/current notice text, excluding the composer and user turns."""
+    try:
+        snapshot = page.evaluate("""
+            () => {
+                const userSelector = '[data-message-author-role="user"], [data-turn="user"], ' +
+                    '[data-testid*="user" i], user-query, .user-query, .user-message';
+                const assistantSelector = '[data-message-author-role="assistant"], [data-turn="assistant"], ' +
+                    '[data-testid*="assistant" i], model-response, message-content, ' +
+                    '.message-content, .model-response-text, [data-testid^="conversation-turn-"]';
+                const visible = (node) => {
+                    const rect = node.getBoundingClientRect();
+                    const style = window.getComputedStyle(node);
+                    return rect.width > 0 && rect.height > 0 &&
+                        style.visibility !== 'hidden' && style.display !== 'none';
+                };
+                const isUser = (node) => Boolean(node.closest(userSelector));
+                let assistant = Array.from(document.querySelectorAll(assistantSelector))
+                    .filter((node) => !isUser(node) && !node.querySelector(userSelector) && visible(node));
+                assistant = assistant.filter((node) => !assistant.some(
+                    (other) => other !== node && node.contains(other)
+                ));
+
+                const notices = Array.from(document.querySelectorAll(
+                    '[role="alert"], [aria-live], [data-testid*="toast" i], [data-testid*="status" i]'
+                )).filter((node) => !isUser(node) && visible(node));
+
+                return {
+                    assistant: assistant.map((node) => (node.innerText || node.textContent || '').trim()),
+                    notices: notices.map((node) => (node.innerText || node.textContent || '').trim())
+                };
+            }
+        """)
+        assistant_texts = [text for text in snapshot.get("assistant", []) if str(text).strip()]
+        if before_signature is not None:
+            before_count = int(before_signature.get("count") or 0)
+            if len(assistant_texts) > before_count:
+                # A single assistant turn may contain a tool card, markdown,
+                # and a follow-up paragraph as separate nodes.  Inspect all
+                # nodes added after the baseline, not just the final one.
+                assistant_texts = assistant_texts[before_count:]
+            elif assistant_texts:
+                assistant_texts = assistant_texts[-1:]
+        if assistant_texts:
+            return assistant_texts
+
+        notices = [text for text in snapshot.get("notices", []) if str(text).strip()]
+        return notices[-1:]
+    except Exception:
+        try:
+            return [page.locator("body").inner_text(timeout=1500)]
+        except Exception:
+            return []
+
+
+def get_generation_quota_evidence(page, before_signature=None):
+    """Return a direct quota phrase only from a newly changed response."""
+    if before_signature is not None and not has_new_assistant_response(page, before_signature):
+        return None
+
+    for text in get_generation_notice_texts(page, before_signature):
+        marker = find_image_quota_marker(text)
+        if marker:
+            return str(text).strip()
+    return None
 
 
 def wait_assistant_response_stable(page, before_signature, stable_seconds=6, timeout=900):
@@ -1421,7 +1793,12 @@ def run_dich_step(page):
     return False
 
 
-def wait_image_generation_finished_or_image_ready(page, old_imgs, timeout=IMAGE_WAIT_TIMEOUT):
+def wait_image_generation_finished_or_image_ready(
+    page,
+    old_imgs,
+    timeout=IMAGE_WAIT_TIMEOUT,
+    before_signature=None,
+):
     """
     Chờ riêng cho bước tạo ảnh theo kiểu KHÓA CỨNG.
 
@@ -1458,6 +1835,11 @@ def wait_image_generation_finished_or_image_ready(page, old_imgs, timeout=IMAGE_
                 return candidate_url
         elif generating:
             candidate_idle_since = None
+
+        quota_evidence = get_generation_quota_evidence(page, before_signature)
+        if quota_evidence and not candidate_url:
+            print("⚠ ChatGPT báo đã hết lượt tạo ảnh")
+            raise QuotaExhaustedError(quota_evidence)
 
         elapsed = int(time.time() - start)
 
@@ -1496,6 +1878,7 @@ def try_create_image(page, old_imgs):
 
         before_send_imgs = get_all_image_srcs(page, include_pending=True)
         merged_old_imgs = list(dict.fromkeys(old_imgs + before_send_imgs))
+        before_response = get_assistant_response_signature(page)
 
         send_prompt(page, PROMPT_TAO_ANH, max_send_attempts=1)
 
@@ -1506,6 +1889,10 @@ def try_create_image(page, old_imgs):
         print("⏳ Chờ ChatGPT bắt đầu tạo ảnh...")
         while time.time() - start < 120:
             wait_if_cloudflare(page)
+            quota_evidence = get_generation_quota_evidence(page, before_response)
+            if quota_evidence:
+                print("⚠ ChatGPT báo đã hết lượt tạo ảnh")
+                raise QuotaExhaustedError(quota_evidence)
             if is_generating(page):
                 started = True
                 break
@@ -1522,7 +1909,8 @@ def try_create_image(page, old_imgs):
         img_url = wait_image_generation_finished_or_image_ready(
             page,
             merged_old_imgs,
-            timeout=IMAGE_WAIT_TIMEOUT
+            timeout=IMAGE_WAIT_TIMEOUT,
+            before_signature=before_response,
         )
 
         if img_url:
@@ -1851,7 +2239,19 @@ def process_one(page, image_indices, img):
         raise Exception(f"File ảnh tải về không hợp lệ: {save_path}")
 
 
+def close_browser_context(context):
+    if context is None:
+        return
+    try:
+        context.close()
+    except Exception:
+        pass
+
+
 def main():
+    if RUN_MODE == "login":
+        return login_only()
+
     ensure_dirs()
     init_progress()
 
@@ -1875,6 +2275,18 @@ def main():
         "pending_before": get_job_state(images)["pending"],
     }
 
+    accounts = get_chatgpt_accounts() if SERVICE == "chatgpt" else []
+    current_account = accounts[0] if accounts else {
+        "id": "current",
+        "name": "ChatGPT",
+        "profile_dir": PROFILE_DIR,
+    }
+    job_id = f"{datetime.now().strftime('%Y%m%dT%H%M%S')}-{os.getpid()}"
+    account_states = {
+        account["id"]: {"name": account["name"], "state": "available"}
+        for account in accounts
+    }
+
     print(f"📁 Ảnh gốc: {IMAGE_FOLDER}")
     print(f"📁 Ảnh VN: {DOWNLOAD_FOLDER}")
     print(f"📄 Log: {PROGRESS_FILE}")
@@ -1882,6 +2294,12 @@ def main():
     print(f"🚀 Mỗi lần xử lý: {BATCH_SIZE} ảnh")
     print(f"📌 Batch lần này: {len(batch)} ảnh")
     print(f"🔁 Chế độ chạy: {RUN_MODE}")
+    if SERVICE == "chatgpt":
+        print(f"👤 Tài khoản ChatGPT: {current_account['name']}")
+        print(
+            "🔄 Tự chuyển khi hết lượt tạo ảnh: "
+            + ("BẬT" if parse_bool(CFG.get("auto_account_fallback_enabled", True)) else "TẮT")
+        )
 
     if START_FROM:
         print(f"▶ Bắt đầu từ: {START_FROM}")
@@ -1889,56 +2307,243 @@ def main():
     if not batch:
         return finish_batch_result(batch_result, images)
 
+    write_job_checkpoint(
+        job_id=job_id,
+        mode=RUN_MODE,
+        images=images,
+        batch=batch,
+        position=0,
+        current_image=batch[0].name,
+        active_account=current_account,
+        stage="starting",
+        state="running",
+        account_states=account_states,
+    )
+
+    final_code = None
+    batch_loop_finished = False
     try:
         with sync_playwright() as p:
             context = None
             try:
-                context = p.chromium.launch_persistent_context(
-                    user_data_dir=PROFILE_DIR,
-                    headless=False,
-                    accept_downloads=True,
-                    args=[
-                        "--disable-blink-features=AutomationControlled"
-                    ],
-                    viewport={"width": 1400, "height": 900}
-                )
+                context = launch_persistent_context(p, PROFILE_DIR)
 
                 page = context.pages[0] if context.pages else context.new_page()
 
                 minimize_own_browser(context)
                 login_if_needed(page)
 
-                for position, img in enumerate(batch):
-                    try:
-                        index = image_indices[img]
-                        save_name = get_output_name(img)
-                        process_one(page, image_indices, img)
-                        batch_result["success_count"] += 1
+                tried_account_ids = {current_account["id"]}
+                waiting_for_account = False
 
-                    except Exception as e:
-                        index = image_indices.get(img, 0)
+                for position, img in enumerate(batch):
+                    write_job_checkpoint(
+                        job_id=job_id,
+                        mode=RUN_MODE,
+                        images=images,
+                        batch=batch,
+                        position=position,
+                        current_image=img.name,
+                        active_account=current_account,
+                        stage="processing",
+                        state="running",
+                        account_states=account_states,
+                    )
+                    while True:
                         try:
+                            index = image_indices[img]
                             save_name = get_output_name(img)
-                        except Exception:
-                            save_name = img.stem + "_VN.png"
-                        print(f"✗ Lỗi: {e}")
-                        write_progress(index, img.name, save_name, "fail", str(e))
-                        batch_result["failure_count"] += 1
-                    finally:
-                        batch_result["completed_count"] += 1
+                            process_one(page, image_indices, img)
+                            batch_result["success_count"] += 1
+                            batch_result["completed_count"] += 1
+                            break
+
+                        except QuotaExhaustedError as quota_error:
+                            emit_account_event(
+                                "account_quota_exhausted",
+                                account_id=current_account["id"],
+                                account_name=current_account["name"],
+                                image=img.name,
+                                evidence=quota_error.evidence[:500],
+                            )
+                            account_states[current_account["id"]] = {
+                                "name": current_account["name"],
+                                "state": "quota_exhausted",
+                                "evidence": quota_error.evidence[:500],
+                            }
+                            write_job_checkpoint(
+                                job_id=job_id,
+                                mode=RUN_MODE,
+                                images=images,
+                                batch=batch,
+                                position=position,
+                                current_image=img.name,
+                                active_account=current_account,
+                                stage="account_quota_exhausted",
+                                state="switching_account",
+                                account_states=account_states,
+                            )
+
+                            if not parse_bool(CFG.get("auto_account_fallback_enabled", True)):
+                                batch_result["waiting_quota"] = True
+                                batch_result["waiting_reason"] = "Tự chuyển tài khoản đang tắt"
+                                batch_result["waiting_image"] = img.name
+                                waiting_for_account = True
+                                break
+
+                            next_context = None
+                            next_page = None
+                            next_account = None
+                            for candidate in accounts:
+                                if candidate["id"] in tried_account_ids:
+                                    continue
+                                tried_account_ids.add(candidate["id"])
+                                candidate_context, candidate_page = open_existing_chatgpt_account(p, candidate)
+                                if candidate_context is None:
+                                    account_states[candidate["id"]] = {
+                                        "name": candidate["name"],
+                                        "state": "skipped",
+                                        "reason": "Profile chưa đăng nhập hoặc chưa sẵn sàng",
+                                    }
+                                    emit_account_event(
+                                        "account_skipped",
+                                        account_id=candidate["id"],
+                                        account_name=candidate["name"],
+                                        reason="Profile chưa đăng nhập hoặc chưa sẵn sàng",
+                                    )
+                                    continue
+                                next_context = candidate_context
+                                next_page = candidate_page
+                                next_account = candidate
+                                break
+
+                            if next_context is None:
+                                batch_result["waiting_quota"] = True
+                                batch_result["waiting_reason"] = "Không còn tài khoản ChatGPT dự phòng đã đăng nhập"
+                                batch_result["waiting_image"] = img.name
+                                emit_account_event(
+                                    "job_waiting",
+                                    image=img.name,
+                                    reason=batch_result["waiting_reason"],
+                                )
+                                waiting_for_account = True
+                                break
+
+                            close_browser_context(context)
+                            context = next_context
+                            page = next_page
+                            current_account = next_account
+                            account_states[current_account["id"]] = {
+                                "name": current_account["name"],
+                                "state": "active",
+                            }
+                            write_job_checkpoint(
+                                job_id=job_id,
+                                mode=RUN_MODE,
+                                images=images,
+                                batch=batch,
+                                position=position,
+                                current_image=img.name,
+                                active_account=current_account,
+                                stage="replaying_after_account_switch",
+                                state="running",
+                                account_states=account_states,
+                            )
+                            emit_account_event(
+                                "account_switched",
+                                account_id=current_account["id"],
+                                account_name=current_account["name"],
+                                image=img.name,
+                            )
+                            print(f"🔁 Chuyển sang {current_account['name']}, chạy lại ảnh {img.name}")
+                            continue
+
+                        except Exception as e:
+                            index = image_indices.get(img, 0)
+                            try:
+                                save_name = get_output_name(img)
+                            except Exception:
+                                save_name = img.stem + "_VN.png"
+                            print(f"✗ Lỗi: {e}")
+                            write_progress(index, img.name, save_name, "fail", str(e))
+                            batch_result["failure_count"] += 1
+                            batch_result["completed_count"] += 1
+                            write_job_checkpoint(
+                                job_id=job_id,
+                                mode=RUN_MODE,
+                                images=images,
+                                batch=batch,
+                                position=position + 1,
+                                current_image="",
+                                active_account=current_account,
+                                stage="image_failed",
+                                state="running",
+                                account_states=account_states,
+                            )
+                            break
+
+                    if waiting_for_account:
+                        write_job_checkpoint(
+                            job_id=job_id,
+                            mode=RUN_MODE,
+                            images=images,
+                            batch=batch,
+                            position=position,
+                            current_image=img.name,
+                            active_account=current_account,
+                            stage="waiting_for_account",
+                            state="waiting_quota",
+                            account_states=account_states,
+                        )
+                        break
+
+                    write_job_checkpoint(
+                        job_id=job_id,
+                        mode=RUN_MODE,
+                        images=images,
+                        batch=batch,
+                        position=position + 1,
+                        current_image="",
+                        active_account=current_account,
+                        stage="image_complete",
+                        state="running",
+                        account_states=account_states,
+                    )
 
                     # The final image does not need a cooldown before the app
                     # evaluates whether to schedule the next batch.
                     if position < len(batch) - 1:
                         print(f"⏸ Nghỉ {WAIT_AFTER_EACH_IMAGE} giây")
                         sleep(WAIT_AFTER_EACH_IMAGE)
+
+                # Commit the completed batch while the Playwright context is
+                # still alive.  On Windows, browser shutdown can occasionally
+                # terminate a worker after the final image was written but
+                # before its result reached the desktop app.  The result and
+                # checkpoint are already fully determined at this point.
+                batch_loop_finished = True
             finally:
-                if context is not None:
-                    context.close()
+                try:
+                    if batch_loop_finished:
+                        final_code = finish_batch_result(batch_result, images)
+                        write_job_checkpoint(
+                            job_id=job_id,
+                            mode=RUN_MODE,
+                            images=images,
+                            batch=batch,
+                            position=len(batch) if final_code == 0 else batch_result.get("completed_count", 0),
+                            current_image=batch_result.get("waiting_image", ""),
+                            active_account=current_account,
+                            stage="finished" if final_code == 0 else "waiting_or_failed",
+                            state=(batch_result.get("job") or {}).get("state", "stopped"),
+                            account_states=account_states,
+                        )
+                finally:
+                    close_browser_context(context)
     except Exception as e:
         batch_result["fatal_error"] = str(e)
         raise
-    return finish_batch_result(batch_result, images)
+    return final_code
 
 
 if __name__ == "__main__":

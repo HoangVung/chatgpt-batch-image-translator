@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>pywebview Liquid Glass POC</title>
+    <link rel="stylesheet" href="styles.css" />
+    <script src="app.js" defer></script>
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="glass sidebar" aria-label="POC navigation">
+        <div class="brand">
+          <span class="brand-mark" aria-hidden="true">P</span>
+          <div>
+            <strong>pywebview POC</strong>
+            <small>Local desktop shell</small>
+          </div>
+        </div>
+
+        <nav>
+          <button class="nav-item active" type="button">Overview</button>
+          <button class="nav-item" type="button">Bridge</button>
+          <button class="nav-item" type="button">Appearance</button>
+        </nav>
+
+        <div class="sidebar-footer">
+          <span id="status-badge" class="status-badge pending">Connecting</span>
+          <small>No CDN · no framework</small>
+        </div>
+      </aside>
+
+      <main>
+        <header class="page-header">
+          <div>
+            <p class="eyebrow">Disposable validation surface</p>
+            <h1>Liquid Glass stack check</h1>
+            <p class="subtitle">Native window, local frontend and a narrow Python bridge.</p>
+          </div>
+          <label class="theme-control">
+            <span>Appearance</span>
+            <select id="theme-select">
+              <option value="system">System</option>
+              <option value="light">Light</option>
+              <option value="dark">Dark</option>
+            </select>
+          </label>
+        </header>
+
+        <section class="metrics" aria-label="Runtime information">
+          <article class="glass card">
+            <span class="card-label">Platform</span>
+            <strong id="platform-value">Waiting…</strong>
+            <small id="machine-value">—</small>
+          </article>
+          <article class="glass card">
+            <span class="card-label">Renderer</span>
+            <strong id="renderer-value">Waiting…</strong>
+            <small id="frozen-value">Source mode</small>
+          </article>
+          <article class="glass card">
+            <span class="card-label">System appearance</span>
+            <strong id="appearance-value">Detecting…</strong>
+            <small id="theme-mode-value">Mode: System</small>
+          </article>
+        </section>
+
+        <section class="content-grid">
+          <article class="glass panel">
+            <div class="panel-heading">
+              <div>
+                <p class="eyebrow">JavaScript → Python</p>
+                <h2>Bridge echo</h2>
+              </div>
+              <span class="mini-badge">Promise API</span>
+            </div>
+            <label for="echo-input">Message</label>
+            <input id="echo-input" value="Xin chào từ JavaScript" />
+            <div class="button-row">
+              <button id="echo-button" class="button primary" type="button">Send echo</button>
+              <button id="python-js-button" class="button secondary" type="button">Python → JS</button>
+            </div>
+            <output id="echo-output" class="result">Waiting for bridge…</output>
+          </article>
+
+          <article class="glass panel">
+            <div class="panel-heading">
+              <div>
+                <p class="eyebrow">Native integration</p>
+                <h2>Folder picker</h2>
+              </div>
+              <span class="mini-badge">OS dialog</span>
+            </div>
+            <p class="helper">The dialog is opened by Python through the native pywebview window.</p>
+            <button id="folder-button" class="button primary" type="button">Choose folder</button>
+            <output id="folder-output" class="result path">No folder selected</output>
+          </article>
+        </section>
+
+        <section class="glass event-panel">
+          <div>
+            <p class="eyebrow">Python → JavaScript</p>
+            <h2>Last pushed event</h2>
+          </div>
+          <output id="python-event-output" class="result">Waiting for Python…</output>
+        </section>
+      </main>
+    </div>
+  </body>
+</html>

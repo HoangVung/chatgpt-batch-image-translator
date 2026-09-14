@@ -30,6 +30,7 @@ worker = importlib.util.module_from_spec(worker_spec)
 worker_spec.loader.exec_module(worker)
 app_namespace = runpy.run_path(str(PROJECT_ROOT / "app.pyw"), run_name="app_under_test")
 App = app_namespace["ChatGPTBatchApp"]
+make_touch_scroll_handlers = app_namespace["make_touch_scroll_handlers"]
 
 
 class Variable:
@@ -130,6 +131,54 @@ class ProgressTests(unittest.TestCase):
             self.assertEqual(worker.main(), 0)
             browser.assert_not_called()
 
+    def test_completed_batch_is_recorded_before_browser_context_closes(self):
+        class Context:
+            pages = [object()]
+
+            def close(self):
+                pass
+
+        class PlaywrightScope:
+            def __enter__(self):
+                return object()
+
+            def __exit__(self, *_args):
+                return False
+
+        image = Path("01_101.jpg")
+        events = []
+        job = {
+            "total": 2,
+            "done": 1,
+            "failed": 0,
+            "pending": 1,
+            "pending_files": [Path("02_102.jpg")],
+            "state": "pending",
+        }
+        with patch.object(worker, "ensure_dirs"), \
+             patch.object(worker, "init_progress"), \
+             patch.object(worker, "get_images", return_value=[image]), \
+             patch.object(worker, "get_next_batch", return_value=[image]), \
+             patch.object(worker, "get_job_state", return_value=job), \
+             patch.object(worker, "get_chatgpt_accounts", return_value=[]), \
+             patch.object(worker, "launch_persistent_context", return_value=Context()), \
+             patch.object(worker, "minimize_own_browser"), \
+             patch.object(worker, "login_if_needed"), \
+             patch.object(worker, "process_one"), \
+             patch.object(worker, "write_job_checkpoint"), \
+             patch.object(worker, "finish_batch_result", side_effect=lambda *_: events.append("result") or 0), \
+             patch.object(worker, "close_browser_context", side_effect=lambda *_: events.append("close")), \
+             patch.object(worker, "sync_playwright", return_value=PlaywrightScope()), \
+             patch.object(worker, "print"):
+            self.assertEqual(worker.main(), 0)
+
+        self.assertEqual(events, ["result", "close"])
+
+    def test_login_mode_opens_only_the_account_session(self):
+        with patch.object(worker, "RUN_MODE", "login"), patch.object(worker, "login_only", return_value=0) as login_only, patch.object(worker, "get_images", side_effect=AssertionError("batch images should not be read")):
+            self.assertEqual(worker.main(), 0)
+            login_only.assert_called_once_with()
+
     def test_done_with_missing_output_returns_to_main_queue(self):
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory)
@@ -222,6 +271,97 @@ class ApplicationStateTests(unittest.TestCase):
         self.assertEqual(app.settings["image_folder"], "new-input")
         self.assertEqual(app.settings["service"], "gemini")
 
+    def test_legacy_chatgpt_profile_becomes_the_first_managed_account(self):
+        app = self.make_app()
+        app.settings.update({
+            "service": "chatgpt",
+            "profile_dir": "legacy-business-profile",
+            "chatgpt_accounts": [],
+            "active_chatgpt_account_id": "",
+        })
+
+        account = app.get_active_chatgpt_account()
+
+        self.assertEqual(account["profile_dir"], "legacy-business-profile")
+        self.assertEqual(app.settings["active_chatgpt_account_id"], account["id"])
+
+    def test_loading_legacy_settings_keeps_a_custom_chatgpt_profile(self):
+        with tempfile.TemporaryDirectory() as directory:
+            settings_file = Path(directory) / "settings.json"
+            settings_file.write_text(
+                json.dumps({"service": "chatgpt", "profile_dir": "legacy-business-profile"}),
+                encoding="utf-8",
+            )
+            app = App.__new__(App)
+            with patch.dict(App.load_settings.__globals__, {"SETTINGS_FILE": settings_file}):
+                app.settings = app.load_settings()
+
+        self.assertEqual(app.get_active_chatgpt_account()["profile_dir"], "legacy-business-profile")
+
+    def test_selecting_a_managed_account_updates_the_profile_for_the_next_run(self):
+        app = self.make_app()
+        app.settings.update({
+            "chatgpt_accounts": [
+                {"id": "one", "name": "Business 1", "profile_dir": "profile-one"},
+                {"id": "two", "name": "Business 2", "profile_dir": "profile-two"},
+            ],
+            "active_chatgpt_account_id": "one",
+        })
+        app.account_var = Variable("Business 2")
+        with patch.object(app, "save_settings"):
+            app.select_chatgpt_account("Business 2")
+
+        self.assertEqual(app.settings["active_chatgpt_account_id"], "two")
+        self.assertEqual(app.profile_var.get(), "profile-two")
+
+    def test_account_name_dialog_prefills_and_selects_the_current_name(self):
+        app = self.make_app()
+
+        class Entry:
+            def __init__(self):
+                self.inserted = None
+                self.selection = None
+
+            def insert(self, index, value):
+                self.inserted = (index, value)
+
+            def select_range(self, start, end):
+                self.selection = (start, end)
+
+        class Dialog:
+            def __init__(self):
+                self._entry = Entry()
+
+            def after(self, _delay, callback):
+                callback()
+
+            def get_input(self):
+                return "  Đăng nhập chính  "
+
+        dialog = Dialog()
+        with patch.object(app_namespace["ctk"], "CTkInputDialog", return_value=dialog):
+            self.assertEqual(app.prompt_chatgpt_account_name("ChatGPT 1"), "Đăng nhập chính")
+
+        self.assertEqual(dialog._entry.inserted, (0, "ChatGPT 1"))
+        self.assertEqual(dialog._entry.selection, (0, "end"))
+
+    def test_renaming_active_account_updates_the_saved_label(self):
+        app = self.make_app()
+        app.settings.update({
+            "chatgpt_accounts": [
+                {"id": "one", "name": "ChatGPT 1", "profile_dir": "profile-one"},
+            ],
+            "active_chatgpt_account_id": "one",
+        })
+
+        with patch.object(app, "can_change_chatgpt_account", return_value=True), \
+             patch.object(app, "prompt_chatgpt_account_name", return_value="Business chính"), \
+             patch.object(app, "save_settings"):
+            app.rename_chatgpt_account()
+
+        self.assertEqual(app.settings["chatgpt_accounts"][0]["name"], "Business chính")
+        self.assertEqual(app.status_var.get(), 'Đã đổi tên thành "Business chính".')
+
     def test_manual_action_state_survives_widget_rebuild(self):
         app = self.make_app()
         app.update_manual_button_from_log("MANUAL_ACTION_REQUIRED")
@@ -270,6 +410,26 @@ class ApplicationStateTests(unittest.TestCase):
         app.current_run_intervened = False
         self.assertEqual(app.get_auto_next_skip_reason(1)[0], "auto_skip_process_error")
 
+    def test_auto_next_recovers_only_after_a_verified_successful_result(self):
+        app = self.make_app()
+        app.current_batch_result = {
+            "requested_batch_size": 10,
+            "selected_count": 10,
+            "completed_count": 10,
+            "success_count": 10,
+            "failure_count": 0,
+            "next_pending_count": 1,
+            "exit_code": 0,
+        }
+
+        self.assertEqual(
+            app.get_auto_next_skip_reason(-1),
+            ("", {"recovered_exit_code": -1}),
+        )
+
+        app.current_batch_result["exit_code"] = 2
+        self.assertEqual(app.get_auto_next_skip_reason(-1)[0], "auto_skip_process_error")
+
     def test_auto_next_delay_must_be_a_finite_positive_number(self):
         app = self.make_app()
         self.assertEqual(app.get_auto_next_delay_seconds(), 120)
@@ -278,6 +438,139 @@ class ApplicationStateTests(unittest.TestCase):
             app.auto_next_delay_var.set(value)
             with self.assertRaises(ValueError):
                 app.get_auto_next_delay_seconds()
+
+
+class UiStyleTests(unittest.TestCase):
+    def make_app(self, style="golden_gate", theme="light"):
+        app = App.__new__(App)
+        app.settings = app_namespace["DEFAULT_SETTINGS"].copy()
+        app.settings.update({"ui_style": style, "theme": theme})
+        return app
+
+    def test_golden_gate_palette_has_all_widget_colors(self):
+        app = self.make_app()
+        palette = app.get_palette()
+        required = {
+            "app_bg", "chrome_bg", "card_bg", "input_bg", "log_bg", "text",
+            "muted", "field", "border", "gray_btn", "gray_btn_active",
+            "gray_btn_pressed", "scroll_track", "scroll_thumb", "scroll_arrow",
+            "selection", "accent", "accent_hover", "accent_pressed", "accent_text",
+            "danger", "danger_hover", "danger_pressed", "disabled_bg", "disabled_text"
+        }
+        self.assertTrue(required.issubset(palette))
+        self.assertEqual(app.style_code(), "golden_gate")
+        classic = self.make_app(style="classic").get_palette()
+        self.assertNotEqual(palette["app_bg"], classic["app_bg"])
+
+    def test_style_change_does_not_cancel_auto_next_or_replace_worker(self):
+        app = self.make_app(style="classic")
+        class Frame:
+            def __init__(self):
+                self.visible = False
+
+            def grid(self):
+                self.visible = True
+
+            def grid_remove(self):
+                self.visible = False
+
+        class Canvas:
+            def __init__(self):
+                self.position = None
+
+            def yview(self):
+                return (0.25, 0.5)
+
+            def yview_moveto(self, position):
+                self.position = position
+
+        app.root = types.SimpleNamespace(winfo_children=lambda: [])
+        app.proc = object()
+        app.auto_next_deadline = 123
+        app.auto_next_after_id = "timer-id"
+        app.log_history = ["existing log"]
+        app.status_var = Variable("Waiting for next batch")
+        app.progress_var = Variable(65)
+        app.progress_label = Variable("Progress: 6/10 images (65%)")
+        app.auto_next_countdown_var = Variable("Next batch in 00:30")
+        app.main_canvas = Canvas()
+
+        def rebuild_widgets():
+            app.status_var = Variable("")
+            app.progress_var = Variable(0)
+            app.progress_label = Variable("")
+            app.auto_next_countdown_var = Variable("")
+            app.auto_next_frame = Frame()
+            app.main_canvas = Canvas()
+
+        with patch.object(app, "cancel_auto_next", side_effect=AssertionError("style change cancelled timer")), \
+             patch.object(app, "save_settings"), \
+             patch.object(app, "setup_style"), \
+             patch.object(app, "build_ui", side_effect=rebuild_widgets):
+            app.set_style("golden_gate")
+
+        self.assertEqual(app.style_code(), "golden_gate")
+        self.assertIsNotNone(app.proc)
+        self.assertEqual(app.auto_next_deadline, 123)
+        self.assertEqual(app.auto_next_after_id, "timer-id")
+        self.assertEqual(app.status_var.get(), "Waiting for next batch")
+        self.assertEqual(app.progress_var.get(), 65)
+        self.assertEqual(app.progress_label.get(), "Progress: 6/10 images (65%)")
+        self.assertEqual(app.auto_next_countdown_var.get(), "Next batch in 00:30")
+        self.assertTrue(app.auto_next_frame.visible)
+        self.assertEqual(app.main_canvas.position, 0.25)
+
+
+class ScrollableLayoutTests(unittest.TestCase):
+    def test_tall_content_keeps_its_full_canvas_height(self):
+        content_height, log_can_expand = App.get_scrollable_main_layout(1400, 700)
+
+        self.assertEqual(content_height, 1400)
+        self.assertFalse(log_can_expand)
+
+    def test_short_content_fills_the_viewport_for_the_log_card(self):
+        content_height, log_can_expand = App.get_scrollable_main_layout(500, 700)
+
+        self.assertEqual(content_height, 700)
+        self.assertTrue(log_can_expand)
+
+
+class TouchScrollTests(unittest.TestCase):
+    class Target:
+        def __init__(self):
+            self.calls = []
+
+        def yview_scroll(self, amount, mode):
+            self.calls.append((amount, mode))
+
+    class Event:
+        def __init__(self, y_root):
+            self.y_root = y_root
+
+    def test_log_touch_blocks_text_selection_for_the_entire_gesture(self):
+        target = self.Target()
+        press, move, release = make_touch_scroll_handlers(
+            target,
+            prevent_drag_selection=True,
+            prefer_pixel_scroll=True,
+        )
+
+        self.assertEqual(press(self.Event(100)), "break")
+        self.assertEqual(move(self.Event(101)), "break")
+        self.assertEqual(move(self.Event(80)), "break")
+        self.assertEqual(release(self.Event(80)), "break")
+        self.assertEqual(target.calls, [(-1, "pixels"), (21, "pixels")])
+
+    def test_log_touch_blocks_orphan_motion_and_release_events(self):
+        target = self.Target()
+        _, move, release = make_touch_scroll_handlers(
+            target,
+            prevent_drag_selection=True,
+        )
+
+        self.assertEqual(move(self.Event(50)), "break")
+        self.assertEqual(release(self.Event(50)), "break")
+        self.assertEqual(target.calls, [])
 
 
 if __name__ == "__main__":

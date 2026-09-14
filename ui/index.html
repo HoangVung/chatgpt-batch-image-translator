@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>ChatGPT Batch Translator Web</title>
+    <link rel="stylesheet" href="styles.css" />
+    <script src="app.js" defer></script>
+  </head>
+  <body>
+    <div class="ambient ambient-one" aria-hidden="true"></div>
+    <div class="ambient ambient-two" aria-hidden="true"></div>
+
+    <div class="shell">
+      <aside class="glass sidebar">
+        <div class="brand">
+          <span class="brand-mark" aria-hidden="true">BT</span>
+          <div class="brand-copy"><strong data-i18n="app_title">Batch Image Translator</strong><small>Studio</small></div>
+        </div>
+
+        <nav aria-label="Primary navigation">
+          <button class="nav active" type="button" data-scroll-target="workspace-top"><span class="nav-icon" aria-hidden="true">⌂</span><span data-i18n="dashboard">Dashboard</span></button>
+          <button class="nav" type="button" data-scroll-target="accounts-card"><span class="nav-icon" aria-hidden="true">◎</span><span data-i18n="accounts">Accounts</span></button>
+          <button class="nav" type="button" data-scroll-target="configuration-card"><span class="nav-icon" aria-hidden="true">⌘</span><span data-i18n="configuration">Configuration</span></button>
+        </nav>
+
+        <div class="sidebar-context" aria-live="polite">
+          <p class="sidebar-label" data-i18n="service">Service</p>
+          <div class="context-pill"><span class="context-dot"></span><strong id="service-context">ChatGPT</strong></div>
+          <p id="account-context" class="context-caption">ChatGPT 1</p>
+        </div>
+
+        <div class="sidebar-footer">
+          <div class="sidebar-settings">
+            <label><span data-i18n="language">Language</span><select id="language"><option value="vi">Tiếng Việt</option><option value="en">English</option></select></label>
+            <label><span data-i18n="theme">Theme</span><select id="theme"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select></label>
+          </div>
+          <div class="runtime-caption"><span id="backend">pywebview</span><span class="runtime-separator">·</span><span>Local</span></div>
+        </div>
+      </aside>
+
+      <main id="workspace-top" class="workspace">
+        <header class="topbar">
+          <div><p class="eyebrow">Production workspace</p><h1 data-i18n="app_title">Batch Image Translator</h1><p class="headline-caption">Local workflow · Shared controller · Native window</p></div>
+          <div id="status" class="status-pill" role="status" aria-live="polite"><span class="status-dot" aria-hidden="true"></span><span class="status-copy">Connecting…</span></div>
+        </header>
+
+        <div id="notice" class="notice hidden" role="alert"><span class="notice-icon" aria-hidden="true">!</span><span class="notice-copy"></span></div>
+
+        <div class="content-grid">
+          <section id="configuration-card" class="glass card configuration-card">
+            <div class="section-title"><div><p class="section-kicker">Workspace</p><h2 data-i18n="configuration">Configuration</h2></div><button id="save" class="button primary compact" type="button" data-i18n="save">Save settings</button></div>
+
+            <div class="form-grid">
+              <label class="field"><span data-i18n="service">Service</span><select id="service"><option value="chatgpt">ChatGPT</option><option value="gemini">Google Gemini</option></select></label>
+              <label class="field"><span data-i18n="batch_size">Images per batch</span><input id="batch-size" inputmode="numeric" autocomplete="off" /></label>
+              <label class="field"><span data-i18n="start_from">Start from image</span><input id="start-from" autocomplete="off" /></label>
+            </div>
+
+            <div class="setting-toggles">
+              <label class="toggle-row"><input id="fallback" type="checkbox" /><span class="toggle" aria-hidden="true"></span><span data-i18n="account_fallback">Switch accounts when quota is exhausted</span></label>
+              <label class="toggle-row"><input id="auto-next" type="checkbox" /><span class="toggle" aria-hidden="true"></span><span data-i18n="auto_next">Automatically run next batch</span></label>
+              <label class="field delay-field"><span data-i18n="auto_next_delay">Wait (minutes)</span><input id="auto-delay" inputmode="decimal" autocomplete="off" /></label>
+            </div>
+
+            <div class="paths">
+              <label class="field path-field"><span data-i18n="source_folder">Source image folder</span><span class="input-action"><input id="source-folder" /><button type="button" data-folder="source" data-i18n="browse">Browse</button></span></label>
+              <label class="field path-field"><span data-i18n="output_folder">VN output folder</span><span class="input-action"><input id="output-folder" /><button type="button" data-folder="output" data-i18n="browse">Browse</button></span></label>
+              <label class="field path-field"><span data-i18n="profile">Browser profile</span><span class="input-action"><input id="profile-folder" /><button type="button" data-folder="profile" data-i18n="browse">Browse</button></span></label>
+            </div>
+          </section>
+
+          <section class="glass card action-card">
+            <div class="section-title"><div><p class="section-kicker">Batch control</p><h2 data-i18n="actions">Actions</h2></div><span id="run-indicator" class="run-indicator"><span></span><span data-i18n="ready">Ready</span></span></div>
+            <div class="mode-actions">
+              <button data-mode="main" class="button primary main-action" type="button"><span class="button-glyph" aria-hidden="true">▶</span><span data-i18n="main">Run new batch</span></button>
+              <button data-mode="retry" class="button secondary" type="button"><span class="button-glyph" aria-hidden="true">↻</span><span data-i18n="retry">Retry failed</span></button>
+              <button data-mode="force" class="button secondary" type="button"><span class="button-glyph" aria-hidden="true">↯</span><span data-i18n="force">Rerun image</span></button>
+            </div>
+            <div class="intervention-actions"><button id="continue" class="button warning" type="button" data-i18n="continue" disabled>Continue</button><button id="stop" class="button danger" type="button" data-i18n="stop">Stop</button></div>
+
+            <div id="manual-banner" class="manual state-banner hidden" role="alert"><span class="state-icon" aria-hidden="true">!</span><span data-i18n="manual_banner">Waiting for manual action.</span></div>
+            <div id="auto-panel" class="auto-panel state-banner hidden"><span class="state-icon" aria-hidden="true">◷</span><span id="countdown"></span><div class="inline-actions"><button id="run-now" type="button" data-i18n="run_now">Run now</button><button id="cancel-auto" type="button" data-i18n="cancel_auto">Cancel</button></div></div>
+
+            <div class="progress-block"><div class="progress-meta"><span data-i18n="progress">Progress</span><strong id="progress-text">0 / 0 (0%)</strong></div><progress id="progress" max="100" value="0" aria-label="Batch progress">0%</progress></div>
+          </section>
+
+          <section id="accounts-card" class="glass card accounts-card">
+            <div class="section-title"><div><p class="section-kicker">Profiles</p><h2 data-i18n="accounts">Accounts</h2></div><span class="account-badge"><span class="context-dot"></span><span id="account-count">1</span></span></div>
+            <div class="account-fields">
+              <label class="field account-select-field"><span data-i18n="account">ChatGPT account</span><select id="account-select"></select></label>
+              <label class="field"><span data-i18n="account_name">Account name</span><input id="account-name" data-placeholder="account_name" autocomplete="off" /></label>
+            </div>
+            <div class="account-actions"><button id="account-add" type="button" data-i18n="add">Add</button><button id="account-rename" type="button" data-i18n="rename">Rename</button><button id="account-login" class="button secondary" type="button" data-i18n="login">Sign in</button><button id="account-remove" class="button danger ghost-danger" type="button" data-i18n="remove">Remove</button></div>
+          </section>
+
+          <section class="log-card">
+            <div class="section-title log-heading"><div><p class="section-kicker">Live output</p><h2 data-i18n="process_log">Process log</h2></div><div class="log-actions"><button id="open-output" type="button" data-i18n="open_output">Open output</button><button id="copy-log" type="button" data-i18n="copy_log">Copy log</button><button id="export-log" type="button" data-i18n="export_log">Export log</button><button id="clear-log" class="subtle-danger" type="button" data-i18n="clear_log">Clear log</button></div></div>
+            <pre id="log" tabindex="0" aria-live="polite" aria-label="Process log"></pre>
+          </section>
+        </div>
+      </main>
+    </div>
+  </body>
+</html>

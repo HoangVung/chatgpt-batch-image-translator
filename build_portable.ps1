@@ -141,7 +141,12 @@ Invoke-Python -m PyInstaller `
     --windowed `
     --noupx `
     --name "$AppName" `
+    --icon (Join-Path $Root "assets\app-icon.ico") `
+    --add-data "$(Join-Path $Root 'ui');ui" `
+    --add-data "$(Join-Path $Root 'assets\app-icon.png');assets" `
+    --collect-all webview `
     --collect-all playwright `
+    --exclude-module numpy `
     --hidden-import sqlite3 `
     --collect-binaries sqlite3 `
     --hidden-import run_chatgpt_batch `
@@ -150,15 +155,22 @@ Invoke-Python -m PyInstaller `
     app.pyw
 
 Write-Host "==> Ensuring SQLite runtime is present..."
-$SqliteDll = Join-Path $PythonRoot "DLLs\sqlite3.dll"
-if (-not (Test-Path -LiteralPath $SqliteDll)) {
-    throw "sqlite3.dll was not found in the selected Python runtime: $SqliteDll"
+$SqliteCandidates = @(
+    (Join-Path $PythonRoot "DLLs\sqlite3.dll"),
+    (Join-Path $PythonRoot "Library\bin\sqlite3.dll"),
+    (Join-Path $PythonRoot "sqlite3.dll")
+)
+$SqliteDll = $SqliteCandidates |
+    Where-Object { Test-Path -LiteralPath $_ } |
+    Select-Object -First 1
+if (-not $SqliteDll) {
+    throw "sqlite3.dll was not found in the selected Python runtime: $PythonRoot"
 }
 Copy-Item -LiteralPath $SqliteDll -Destination $DistApp -Force
 
 Write-Host "==> Installing Playwright Chromium into portable folder..."
 $env:PLAYWRIGHT_BROWSERS_PATH = Join-Path $DistApp "ms-playwright"
-Invoke-Python -m playwright install chromium
+Invoke-Python -m playwright install chromium --no-shell
 
 if (-not (Test-Path -LiteralPath (Join-Path $DistApp "$AppName.exe"))) {
     throw "PyInstaller finished without creating $AppName.exe."

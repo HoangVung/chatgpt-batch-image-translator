@@ -21,6 +21,7 @@ rm -rf "$ROOT/build" "$DIST_APP"
   --onedir \
   --windowed \
   --name "$APP_NAME" \
+  --add-data "$ROOT/assets/app-icon.png:assets" \
   --collect-all playwright \
   --hidden-import run_chatgpt_batch \
   app.pyw
