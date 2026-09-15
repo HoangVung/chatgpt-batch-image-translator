@@ -87,6 +87,15 @@ class WebBridge:
     def set_theme(self, theme):
         return self._api.set_theme(theme)
 
+    def minimize_window(self):
+        return self._api.minimize_window()
+
+    def toggle_maximize_window(self):
+        return self._api.toggle_maximize_window()
+
+    def close_window(self):
+        return self._api.close_window()
+
     def open_output_folder(self):
         return self._api.open_output_folder()
 
@@ -147,7 +156,7 @@ def run_webview() -> None:
             height=820,
             min_size=(900, 620),
             resizable=True,
-            frameless=False,
+            frameless=True,
             background_color="#E8EEF7",
             vibrancy=sys.platform == "darwin",
             text_select=True,
@@ -171,7 +180,14 @@ def run_webview() -> None:
         window.events.loaded += on_loaded
         window.events.closed += on_closed
         icon = str(WINDOWS_ICON_FILE) if WINDOWS_ICON_FILE.is_file() else None
-        webview.start(http_server=True, private_mode=True, icon=icon)
+        # easy_drag=True lets the user drag the frameless window from any empty
+        # chrome region. Buttons/inputs opt out via [data-window-drag="no"].
+        webview.start(
+            http_server=True,
+            private_mode=True,
+            icon=icon,
+            easy_drag=sys.platform != "darwin",
+        )
     except Exception as exc:
         if not initialized:
             if api is not None:

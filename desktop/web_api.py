@@ -526,6 +526,62 @@ class WebApi:
     def set_theme(self, code: Any) -> dict[str, Any]:
         return self.save_settings({"theme": code})
 
+    def minimize_window(self) -> dict[str, Any]:
+        """Minimize the host pywebview window. Used by the Mac-style traffic light."""
+        try:
+            if self.window is None:
+                raise RuntimeError("window is not attached")
+            self.window.minimize()
+            return success({"minimized": True})
+        except Exception as exc:
+            return failure(exc)
+
+    def toggle_maximize_window(self) -> dict[str, Any]:
+        """Toggle between maximized and the previous restored state. Mac-style zoom button."""
+        try:
+            if self.window is None:
+                raise RuntimeError("window is not attached")
+            # pywebview 6.x exposes maximize()/restore(); we keep the last restored
+            # state so the user can snap back to where they were before zooming.
+            if not hasattr(self, "_pre_zoom_state"):
+                self._pre_zoom_state: dict[str, int] | None = None
+                self._is_zoomed: bool = False
+            if not self._is_zoomed:
+                try:
+                    self._pre_zoom_state = {
+                        "x": int(self.window.x),
+                        "y": int(self.window.y),
+                        "width": int(self.window.width),
+                        "height": int(self.window.height),
+                    }
+                except Exception:
+                    self._pre_zoom_state = None
+                self.window.maximize()
+                self._is_zoomed = True
+            else:
+                self.window.restore()
+                pre = self._pre_zoom_state
+                if pre is not None:
+                    try:
+                        self.window.move(pre["x"], pre["y"])
+                        self.window.resize(pre["width"], pre["height"])
+                    except Exception:
+                        pass
+                self._is_zoomed = False
+            return success({"maximized": self._is_zoomed})
+        except Exception as exc:
+            return failure(exc)
+
+    def close_window(self) -> dict[str, Any]:
+        """Close the host pywebview window. Mac-style traffic light."""
+        try:
+            if self.window is None:
+                raise RuntimeError("window is not attached")
+            self.window.close()
+            return success({"closed": True})
+        except Exception as exc:
+            return failure(exc)
+
     def open_output_folder(self) -> dict[str, Any]:
         try:
             folder = Path(str(self.settings.get("download_folder", "")))

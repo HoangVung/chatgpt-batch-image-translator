@@ -1158,3 +1158,193 @@ progress::-webkit-progress-value {
     backdrop-filter: none;
   }
 }
+
+/* =================================================================
+ * Mac OS Aqua Pass — chrome, traffic lights, button & logo polish
+ * ================================================================= */
+
+/* Reserve space for the fixed custom titlebar so the .shell starts below it. */
+body {
+  padding-top: 38px;
+  text-rendering: optimizeLegibility;
+  font-feature-settings: "ss01", "cv11";
+}
+
+/* ----- Custom titlebar ---------------------------------------------- */
+.titlebar {
+  position: fixed;
+  top: 0; left: 0; right: 0;
+  z-index: 1000;
+  display: grid;
+  grid-template-columns: 96px 1fr 96px;
+  align-items: center;
+  height: 38px;
+  padding: 0 12px;
+  background: linear-gradient(180deg,
+              color-mix(in srgb, var(--bg-panel-strong) 78%, transparent),
+              color-mix(in srgb, var(--bg-panel-strong) 56%, transparent));
+  -webkit-backdrop-filter: blur(28px) saturate(180%);
+  backdrop-filter: blur(28px) saturate(180%);
+  border-bottom: 1px solid var(--divider);
+  user-select: none;
+}
+
+.titlebar-title {
+  text-align: center;
+  font: 600 12.5px/1 -apple-system, BlinkMacSystemFont, "SF Pro Text",
+                 "Segoe UI Variable", "Segoe UI", sans-serif;
+  letter-spacing: 0.005em;
+  color: var(--text-secondary);
+  pointer-events: none; /* let easy_drag drag through the title text */
+}
+
+.titlebar-actions {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Compact status pill when it lives in the titlebar. */
+.titlebar .status-pill {
+  min-height: 26px;
+  padding: 0 10px;
+  font-size: 11px;
+}
+
+/* ----- Traffic lights ------------------------------------------------ */
+.traffic-lights {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.tl {
+  width: 12px;
+  height: 12px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  cursor: pointer;
+  position: relative;
+  box-shadow:
+    inset 0 0 0 0.5px rgba(0, 0, 0, 0.18),
+    inset 0 1px 0 rgba(255, 255, 255, 0.35);
+  transition: width 120ms ease, height 120ms ease, transform 120ms ease;
+}
+
+.tl-close    { background: #ff5f57; }
+.tl-minimize { background: #febc2e; }
+.tl-zoom     { background: #28c840; }
+
+/* Hover reveals the iconic glyph inside the dot. */
+.tl::before {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  font: 700 10px/1 -apple-system, "SF Pro Text", system-ui, sans-serif;
+  opacity: 0;
+  transition: opacity 90ms ease;
+}
+.tl-close::before    { content: "\00d7"; color: #5e0000; font-size: 11px; }
+.tl-minimize::before { content: "\2212"; color: #5a3700; font-size: 13px; }
+.tl-zoom::before     { content: "+";     color: #0a4d1a; font-size: 12px; font-weight: 800; }
+
+.tl:hover {
+  width: 14px;
+  height: 14px;
+}
+.tl:hover::before { opacity: 1; }
+.tl:active { transform: scale(0.94); }
+.tl:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--focus-ring),
+              inset 0 0 0 0.5px rgba(0, 0, 0, 0.18);
+}
+
+/* ----- Brand mark squircle (macOS Big Sur+ app icon shape) ---------- */
+.brand-mark {
+  border-radius: 28% / 38%;
+}
+
+/* ----- Topbar within .workspace -------------------------------------- */
+/* The page hero no longer carries the status pill (moved into the
+   titlebar), so we let it breathe with a touch more vertical rhythm. */
+.topbar {
+  align-items: flex-end;
+}
+
+/* ----- Action buttons: nudge toward Aqua proportions --------------- */
+/* Slightly slimmer "Run new batch" button — less jumbo, more Mac. */
+.main-action {
+  min-height: 38px;
+  font-size: 12.5px;
+  letter-spacing: 0.005em;
+}
+
+.main-action .button-glyph { margin-right: 8px; font-size: 11px; }
+
+/* ----- Status dot pulse (idle ↔ running) --------------------------- */
+@keyframes macos-status-pulse {
+  0%   { box-shadow: 0 0 0 0   var(--accent-soft); }
+  70%  { box-shadow: 0 0 0 6px color-mix(in srgb, var(--accent) 0%, transparent); }
+  100% { box-shadow: 0 0 0 0   color-mix(in srgb, var(--accent) 0%, transparent); }
+}
+
+body.is-running .status-dot {
+  animation: macos-status-pulse 1.6s ease-out infinite;
+}
+
+/* Tabular numerals where numbers matter. */
+#progress-text,
+.status-pill .status-copy,
+.run-indicator,
+.account-badge {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum";
+}
+
+/* ----- SVG nav icons (replaces prior unicode glyphs) --------------- */
+.nav-icon {
+  width: 16px;
+  height: 16px;
+  font-size: 0;
+  color: currentColor;
+  opacity: 0.85;
+  flex: 0 0 16px;
+  transition: opacity var(--transition-fast), transform var(--transition-fast);
+}
+
+.nav:hover .nav-icon,
+.nav.active .nav-icon {
+  opacity: 1;
+}
+
+/* ----- Select chevron: cleaner inline SVG ---------------------------- */
+select {
+  background-image: url("data:image/svg+xml;utf8,<svg viewBox='0 0 8 5'><path d='M0 0l4 5 4-5z' fill='%23778397'/></svg>");
+  background-repeat: no-repeat;
+  background-position: right 11px center;
+  background-size: 8px 5px;
+  padding-right: 28px;
+}
+
+/* ----- Subtle scrollbar polish -------------------------------------- */
+*::-webkit-scrollbar { width: 10px; height: 10px; }
+*::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--text-muted) 35%, transparent);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--text-muted) 55%, transparent);
+  background-clip: padding-box;
+}
+*::-webkit-scrollbar-track { background: transparent; }
+
+/* When running inside pywebview with frameless=False fallback (older
+   test harnesses), hide our custom titlebar to avoid double chrome. */
+body.no-custom-chrome .titlebar { display: none; }
+body.no-custom-chrome { padding-top: 0; }

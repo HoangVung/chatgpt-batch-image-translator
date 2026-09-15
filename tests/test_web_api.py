@@ -119,20 +119,24 @@ class WebApiTests(unittest.TestCase):
             if not name.startswith("_") and callable(getattr(self.api, name))
         }
         self.assertEqual(public, {
-            "add_account", "cancel_auto_next", "choose_folder", "clear_log", "continue_manual_intervention",
-            "copy_log", "export_log", "get_initial_state", "get_platform_capabilities", "list_accounts",
-            "login_account", "open_output_folder", "remove_account", "rename_account", "run_auto_next_now",
-            "save_settings", "select_account", "set_language", "set_theme", "start_batch", "stop_process",
+            "add_account", "cancel_auto_next", "choose_folder", "clear_log", "close_window",
+            "continue_manual_intervention", "copy_log", "export_log", "get_initial_state",
+            "get_platform_capabilities", "list_accounts", "login_account", "minimize_window",
+            "open_output_folder", "remove_account", "rename_account", "run_auto_next_now",
+            "save_settings", "select_account", "set_language", "set_theme", "start_batch",
+            "stop_process", "toggle_maximize_window",
         })
 
     def test_pywebview_bridge_contains_no_public_runtime_state(self):
         bridge = WebBridge(self.api)
         public = {name for name in dir(bridge) if not name.startswith("_")}
         self.assertEqual(public, {
-            "add_account", "cancel_auto_next", "choose_folder", "clear_log", "continue_manual_intervention",
-            "copy_log", "export_log", "get_initial_state", "get_platform_capabilities", "list_accounts",
-            "login_account", "open_output_folder", "remove_account", "rename_account", "run_auto_next_now",
-            "save_settings", "select_account", "set_language", "set_theme", "start_batch", "stop_process",
+            "add_account", "cancel_auto_next", "choose_folder", "clear_log", "close_window",
+            "continue_manual_intervention", "copy_log", "export_log", "get_initial_state",
+            "get_platform_capabilities", "list_accounts", "login_account", "minimize_window",
+            "open_output_folder", "remove_account", "rename_account", "run_auto_next_now",
+            "save_settings", "select_account", "set_language", "set_theme", "start_batch",
+            "stop_process", "toggle_maximize_window",
         })
         self.assertTrue(all(callable(getattr(bridge, name)) for name in public))
 
