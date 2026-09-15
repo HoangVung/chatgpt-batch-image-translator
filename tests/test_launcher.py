@@ -131,6 +131,27 @@ class LauncherTests(unittest.TestCase):
 
         self.assertEqual(FakeApi.instances[0].renderer, "edgechromium")
 
+    def test_webview_passes_branded_icon_to_native_shell(self):
+        window = SimpleNamespace(events=SimpleNamespace(
+            initialized=EventHook(), loaded=EventHook(), closed=EventHook()
+        ))
+        start_kwargs = {}
+
+        def start(**kwargs):
+            start_kwargs.update(kwargs)
+
+        fake_webview = SimpleNamespace(create_window=lambda *args, **kwargs: window, start=start)
+
+        with (
+            patch.object(webview_app, "WebApi", FakeApi),
+            patch.object(webview_app, "set_windows_app_user_model_id") as set_identity,
+            patch.dict(sys.modules, {"webview": fake_webview}),
+        ):
+            webview_app.run_webview()
+
+        set_identity.assert_called_once_with()
+        self.assertEqual(start_kwargs["icon"], str(webview_app.WINDOWS_ICON_FILE))
+
 
 if __name__ == "__main__":
     unittest.main()

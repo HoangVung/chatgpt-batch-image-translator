@@ -144,6 +144,7 @@ Invoke-Python -m PyInstaller `
     --icon (Join-Path $Root "assets\app-icon.ico") `
     --add-data "$(Join-Path $Root 'ui');ui" `
     --add-data "$(Join-Path $Root 'assets\app-icon.png');assets" `
+    --add-data "$(Join-Path $Root 'assets\app-icon.ico');assets" `
     --collect-all webview `
     --collect-all playwright `
     --exclude-module numpy `

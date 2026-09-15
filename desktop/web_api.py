@@ -35,6 +35,17 @@ from desktop.web_text import WEB_TEXT
 
 VALID_MODES = {"main", "retry", "force"}
 VALID_FOLDER_KINDS = {"source", "output", "profile"}
+RUN_CONFIGURATION_KEYS = {
+    "image_folder",
+    "download_folder",
+    "profile_dir",
+    "batch_size",
+    "start_from",
+    "auto_next_enabled",
+    "auto_next_delay_minutes",
+    "auto_account_fallback_enabled",
+    "service",
+}
 
 
 def success(data: Any = None) -> dict[str, Any]:
@@ -287,9 +298,18 @@ class WebApi:
 
     def save_settings(self, payload: Any) -> dict[str, Any]:
         try:
-            self.settings = apply_form_settings(self.settings, payload, self.data_dir)
-            write_settings(self.settings_path, self.settings)
-            self.controller.mark_run_configuration_changed()
+            previous = self.settings
+            updated = apply_form_settings(previous, payload, self.data_dir)
+            settings_changed = updated != previous
+            run_configuration_changed = any(
+                updated.get(key) != previous.get(key)
+                for key in RUN_CONFIGURATION_KEYS
+            )
+            self.settings = updated
+            if settings_changed:
+                write_settings(self.settings_path, self.settings)
+            if run_configuration_changed:
+                self.controller.mark_run_configuration_changed()
             self._configure_controller()
             self._dispatch_once()
             return success({"settings": self._public_settings()})

@@ -25,3 +25,7 @@ dist_rebuild/
 
 app_settings.json
 output/
+
+# Local release binaries are too large for normal GitHub repository objects.
+release/ChatGPT-Batch-Translator-v*-Windows-x64/
+release/ChatGPT-Batch-Translator-v*-Windows-x64.zip

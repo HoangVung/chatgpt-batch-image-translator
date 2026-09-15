@@ -10,10 +10,12 @@ if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from desktop.web_api import WebApi
+from desktop.window_identity import set_windows_app_user_model_id
 
 
 RESOURCE_ROOT = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parents[1]))
 UI_ENTRYPOINT = RESOURCE_ROOT / "ui" / "index.html"
+WINDOWS_ICON_FILE = RESOURCE_ROOT / "assets" / "app-icon.ico"
 
 
 class WebShellStartupError(RuntimeError):
@@ -136,6 +138,7 @@ def run_webview() -> None:
 
         api = WebApi()
         bridge = WebBridge(api)
+        set_windows_app_user_model_id()
         window = webview.create_window(
             "ChatGPT Batch Translator",
             url=str(UI_ENTRYPOINT),
@@ -167,7 +170,8 @@ def run_webview() -> None:
         window.events.initialized += on_initialized
         window.events.loaded += on_loaded
         window.events.closed += on_closed
-        webview.start(http_server=True, private_mode=True)
+        icon = str(WINDOWS_ICON_FILE) if WINDOWS_ICON_FILE.is_file() else None
+        webview.start(http_server=True, private_mode=True, icon=icon)
     except Exception as exc:
         if not initialized:
             if api is not None:

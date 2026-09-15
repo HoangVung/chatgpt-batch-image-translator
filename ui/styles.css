@@ -23,9 +23,16 @@
   --warning-soft: rgba(226, 144, 24, 0.15);
   --danger: #c13b35;
   --danger-soft: rgba(193, 59, 53, 0.1);
-  --log-bg: rgba(17, 24, 36, 0.96);
-  --log-text: #eaf1fb;
-  --log-muted: #9fadc1;
+  --log-bg: rgba(244, 248, 253, 0.76);
+  --log-surface: rgba(255, 255, 255, 0.68);
+  --log-border: rgba(71, 85, 105, 0.16);
+  --log-control-bg: rgba(255, 255, 255, 0.62);
+  --log-control-hover: rgba(255, 255, 255, 0.9);
+  --log-edge: rgba(255, 255, 255, 0.72);
+  --log-text: #253147;
+  --log-muted: #66758a;
+  --log-kicker: #0a6ee8;
+  --log-scrollbar: rgba(83, 97, 118, 0.34);
   --focus-ring: rgba(10, 110, 232, 0.24);
   --radius-sm: 10px;
   --radius-md: 15px;
@@ -70,9 +77,16 @@
   --warning-soft: rgba(240, 180, 92, 0.14);
   --danger: #ff8d87;
   --danger-soft: rgba(255, 141, 135, 0.12);
-  --log-bg: rgba(5, 9, 15, 0.94);
+  --log-bg: rgba(27, 36, 51, 0.78);
+  --log-surface: rgba(17, 25, 38, 0.74);
+  --log-border: rgba(255, 255, 255, 0.11);
+  --log-control-bg: rgba(255, 255, 255, 0.07);
+  --log-control-hover: rgba(255, 255, 255, 0.12);
+  --log-edge: rgba(255, 255, 255, 0.1);
   --log-text: #e9f0fa;
-  --log-muted: #8998ad;
+  --log-muted: #9cabc0;
+  --log-kicker: #7fb5ff;
+  --log-scrollbar: rgba(180, 194, 214, 0.34);
   --focus-ring: rgba(101, 167, 255, 0.28);
   --shadow-panel: 0 22px 58px rgba(0, 0, 0, 0.34), 0 2px 10px rgba(0, 0, 0, 0.2);
   --shadow-control: 0 5px 16px rgba(0, 0, 0, 0.18);
@@ -104,9 +118,16 @@
     --warning-soft: rgba(240, 180, 92, 0.14);
     --danger: #ff8d87;
     --danger-soft: rgba(255, 141, 135, 0.12);
-    --log-bg: rgba(5, 9, 15, 0.94);
+    --log-bg: rgba(27, 36, 51, 0.78);
+    --log-surface: rgba(17, 25, 38, 0.74);
+    --log-border: rgba(255, 255, 255, 0.11);
+    --log-control-bg: rgba(255, 255, 255, 0.07);
+    --log-control-hover: rgba(255, 255, 255, 0.12);
+    --log-edge: rgba(255, 255, 255, 0.1);
     --log-text: #e9f0fa;
-    --log-muted: #8998ad;
+    --log-muted: #9cabc0;
+    --log-kicker: #7fb5ff;
+    --log-scrollbar: rgba(180, 194, 214, 0.34);
     --focus-ring: rgba(101, 167, 255, 0.28);
     --shadow-panel: 0 22px 58px rgba(0, 0, 0, 0.34), 0 2px 10px rgba(0, 0, 0, 0.2);
     --shadow-control: 0 5px 16px rgba(0, 0, 0, 0.18);
@@ -909,10 +930,10 @@ progress::-webkit-progress-value {
 .log-card {
   grid-column: 1 / -1;
   padding: var(--spacing-5);
-  border: 1px solid rgba(255, 255, 255, 0.11);
+  border: 1px solid var(--log-border);
   color: var(--log-text);
   background: var(--log-bg);
-  box-shadow: var(--shadow-panel), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  box-shadow: var(--shadow-panel), inset 0 1px 0 var(--log-edge);
 }
 
 .log-card h2 {
@@ -920,7 +941,7 @@ progress::-webkit-progress-value {
 }
 
 .log-card .section-kicker {
-  color: #7fb5ff;
+  color: var(--log-kicker);
 }
 
 .log-heading {
@@ -938,20 +959,20 @@ progress::-webkit-progress-value {
 .log-actions button {
   min-height: 30px;
   padding: 0 10px;
-  border-color: rgba(255, 255, 255, 0.12);
+  border-color: var(--log-border);
   color: var(--log-text);
-  background: rgba(255, 255, 255, 0.07);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  background: var(--log-control-bg);
+  box-shadow: inset 0 1px 0 var(--log-edge);
   font-size: 10px;
 }
 
 .log-actions button:hover:not(:disabled) {
-  border-color: rgba(255, 255, 255, 0.2);
-  background: rgba(255, 255, 255, 0.12);
+  border-color: color-mix(in srgb, var(--accent) 28%, var(--log-border));
+  background: var(--log-control-hover);
 }
 
 .log-actions .subtle-danger {
-  color: #ffaaa5;
+  color: var(--danger);
 }
 
 #log {
@@ -961,13 +982,13 @@ progress::-webkit-progress-value {
   margin: 0;
   padding: var(--spacing-4);
   overflow: auto;
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--log-border);
   border-radius: var(--radius-md);
   color: var(--log-text);
-  background: rgba(0, 0, 0, 0.2);
+  background: var(--log-surface);
   font: 12px/1.58 "SFMono-Regular", "Cascadia Mono", Consolas, monospace;
   overflow-wrap: anywhere;
-  scrollbar-color: rgba(255, 255, 255, 0.22) transparent;
+  scrollbar-color: var(--log-scrollbar) transparent;
   tab-size: 2;
   white-space: pre-wrap;
 }

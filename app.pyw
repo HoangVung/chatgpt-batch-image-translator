@@ -63,6 +63,7 @@ from desktop.runtime import (
     normalize_chatgpt_accounts as normalize_accounts,
     save_settings as save_settings_file,
 )
+from desktop.window_identity import set_windows_app_user_model_id
 
 try:
     import winreg
@@ -85,6 +86,7 @@ def get_resource_path(*parts):
 
 
 APP_ICON_FILE = get_resource_path("assets", "app-icon.png")
+APP_ICON_ICO_FILE = get_resource_path("assets", "app-icon.ico")
 
 
 def get_data_dir():
@@ -683,6 +685,11 @@ class ChatGPTBatchApp:
 
     def set_window_icon(self):
         """Apply the branded icon to the title bar, taskbar, and app switcher."""
+        if sys.platform == "win32" and APP_ICON_ICO_FILE.is_file():
+            try:
+                self.root.iconbitmap(default=str(APP_ICON_ICO_FILE))
+            except (OSError, tk.TclError):
+                pass
         try:
             self.window_icon = tk.PhotoImage(file=str(APP_ICON_FILE))
             self.root.iconphoto(True, self.window_icon)
@@ -2525,6 +2532,7 @@ class ChatGPTBatchApp:
 
 def run_tk_app():
     enable_windows_dpi_awareness()
+    set_windows_app_user_model_id()
     root = ctk.CTk()
     app = ChatGPTBatchApp(root)
     root.mainloop()

@@ -1,6 +1,9 @@
 "use strict";
 
-const state = {settings: {}, controller: {}, localization: {}, language: "vi", sequence: 0, initialized: false};
+const state = {
+  settings: {}, controller: {}, localization: {}, language: "vi", sequence: 0,
+  initialized: false, launchPending: false,
+};
 const pendingMessages = [];
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector)];
@@ -135,6 +138,7 @@ function renderController() {
   const total = controller.progress_total || 0;
   const percent = total ? done / total * 100 : 0;
   const running = !!controller.running;
+  const launchPending = !!state.launchPending;
   const manual = !!controller.manual_action_required;
   const autoNext = !!controller.auto_next_active;
 
@@ -145,9 +149,9 @@ function renderController() {
   $("#manual-banner").classList.toggle("hidden", !manual);
   $("#continue").disabled = !manual;
   $("#stop").disabled = !running && !autoNext;
-  $$('[data-mode]').forEach((button) => { button.disabled = running; });
+  $$('[data-mode]').forEach((button) => { button.disabled = running || launchPending; });
   ["account-select", "account-name", "account-add", "account-rename", "account-remove", "account-login"].forEach((id) => {
-    $(`#${id}`).disabled = running;
+    $(`#${id}`).disabled = running || launchPending;
   });
 
   const runCopy = $("#run-indicator span:last-child");
@@ -245,12 +249,19 @@ function bind() {
     }
   }));
   $$('[data-mode]').forEach((button) => button.addEventListener("click", async () => {
+    if (state.launchPending || state.controller.running) return;
+    state.launchPending = true;
+    renderController();
     try {
       clearError();
       await save();
-      await api("start_batch", button.dataset.mode);
+      const data = await api("start_batch", button.dataset.mode);
+      if (data?.state) state.controller = {...state.controller, ...data.state};
     } catch (error) {
       showError(error);
+    } finally {
+      state.launchPending = false;
+      renderController();
     }
   }));
   $("#stop").addEventListener("click", () => api("stop_process").catch(showError));
@@ -259,7 +270,6 @@ function bind() {
   $("#run-now").addEventListener("click", () => api("run_auto_next_now").catch(showError));
   $("#open-output").addEventListener("click", async () => {
     try {
-      await save();
       await api("open_output_folder");
     } catch (error) {
       showError(error);
