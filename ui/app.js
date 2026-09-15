@@ -343,3 +343,56 @@ async function accountAction(method, id, name) {
 
 if (window.pywebview?.api) initialize();
 else window.addEventListener("pywebviewready", initialize, {once: true});
+
+/* =====================================================================
+ * Mac OS Aqua Pass — traffic-light chrome + drag-region hints
+ * ===================================================================== */
+
+/* Detect whether we are running inside the pywebview shell. When opened in
+   a regular browser (dev preview, tests), we hide the custom titlebar via a
+   body class so the page still looks correct. */
+function applyChromeEnvironment() {
+  const inWebview = !!(window.pywebview?.api);
+  document.body.classList.toggle("in-webview", inWebview);
+  document.body.classList.toggle("no-custom-chrome", !inWebview);
+}
+
+applyChromeEnvironment();
+window.addEventListener("pywebviewready", applyChromeEnvironment, {once: true});
+
+/* Safe call: returns a promise even when the bridge isn't reachable. */
+function callWindowBridge(method) {
+  const fn = window.pywebview?.api?.[method];
+  if (typeof fn !== "function") return Promise.resolve({ok: false, error: "bridge unavailable"});
+  try {
+    return Promise.resolve(fn());
+  } catch (error) {
+    return Promise.resolve({ok: false, error: String(error?.message || error)});
+  }
+}
+
+const WINDOW_ACTIONS = {
+  "minimize-window": () => callWindowBridge("minimize_window"),
+  "toggle-maximize-window": () => callWindowBridge("toggle_maximize_window"),
+  "close-window": () => callWindowBridge("close_window"),
+};
+
+document.addEventListener("click", (event) => {
+  const target = event.target instanceof Element
+    ? event.target.closest("[data-action]")
+    : null;
+  if (!target) return;
+  const handler = WINDOW_ACTIONS[target.dataset.action];
+  if (!handler) return;
+  handler();
+  /* Close swallows the click on macOS maximize double-click area; nothing
+     else to do. */
+});
+
+/* When pywebview finishes moving the window to a new state, refresh the
+   zoom glyph (light refresh of hover-state classes; pure visual nicety). */
+window.addEventListener("pywebviewready", () => {
+  const zoom = document.querySelector('[data-action="toggle-maximize-window"]');
+  if (!zoom) return;
+  zoom.setAttribute("aria-label", "Zoom window");
+});
