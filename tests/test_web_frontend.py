@@ -83,7 +83,8 @@ class WebFrontendTests(unittest.TestCase):
             choose_folder: (kind) => ok({kind, path:'D:/picked', cancelled:false}),
             stop_process: () => ok(), continue_manual_intervention: () => ok(),
             cancel_auto_next: () => ok(), run_auto_next_now: () => ok(),
-            open_output_folder: () => ok(), copy_log: () => ok(), export_log: () => ok(), clear_log: () => ok(),
+            open_output_folder: () => { bridgeCalls.push(['open_output_folder']); return ok(); },
+            copy_log: () => ok(), export_log: () => ok(), clear_log: () => ok(),
             select_account: (id) => { bridgeCalls.push(['select_account', id]); return ok({accounts:initial.settings.chatgpt_accounts,active_id:id}); },
             add_account: (name) => { bridgeCalls.push(['add_account', name]); return ok({accounts:initial.settings.chatgpt_accounts,active_id:'business'}); },
             rename_account: (id, name) => { bridgeCalls.push(['rename_account', id, name]); return ok({accounts:initial.settings.chatgpt_accounts,active_id:id}); },
@@ -108,6 +109,10 @@ class WebFrontendTests(unittest.TestCase):
         self.assertEqual(page.locator("html").get_attribute("data-theme"), "dark")
         dark_field = page.locator("#source-folder").evaluate("node => getComputedStyle(node).backgroundColor")
         self.assertIn("9, 14, 23", dark_field)
+        dark_log_card = page.locator(".log-card").evaluate("node => getComputedStyle(node).backgroundColor")
+        dark_log_surface = page.locator("#log").evaluate("node => getComputedStyle(node).backgroundColor")
+        self.assertIn("27, 36, 51", dark_log_card)
+        self.assertIn("17, 25, 38", dark_log_surface)
         screenshot_dir = os.environ.get("PHASE4_SCREENSHOT_DIR")
         if screenshot_dir:
             target = Path(screenshot_dir)
@@ -119,6 +124,10 @@ class WebFrontendTests(unittest.TestCase):
         page.wait_for_function("document.documentElement.dataset.theme === 'light'")
         page.wait_for_timeout(220)
         self.assertEqual(page.locator("html").get_attribute("data-theme"), "light")
+        light_log_card = page.locator(".log-card").evaluate("node => getComputedStyle(node).backgroundColor")
+        light_log_surface = page.locator("#log").evaluate("node => getComputedStyle(node).backgroundColor")
+        self.assertIn("244, 248, 253", light_log_card)
+        self.assertIn("255, 255, 255", light_log_surface)
         page.evaluate("""
           window.batchTranslatorReceive({sequence:1,type:'progress_changed',payload:{done:4,total:10}});
           window.batchTranslatorReceive({sequence:2,type:'log_appended',payload:{text:'next log\\n'}});
@@ -132,6 +141,17 @@ class WebFrontendTests(unittest.TestCase):
         self.assertTrue(page.locator("#auto-panel").is_visible())
         self.assertIn("00:05", page.locator("#countdown").text_content())
 
+        page.evaluate("window.bridgeCalls = []")
+        page.evaluate("""
+          const button = document.querySelector("button[data-mode='main']");
+          button.click();
+          button.click();
+        """)
+        page.wait_for_function("window.bridgeCalls.some(call => call[0] === 'start_batch')")
+        calls = page.evaluate("window.bridgeCalls")
+        self.assertEqual([call[0] for call in calls], ["save_settings", "start_batch"])
+
+        page.evaluate("window.bridgeCalls = []")
         for mode in ("main", "retry", "force"):
             page.locator(f"button[data-mode='{mode}']").click()
             page.wait_for_function(
@@ -140,6 +160,11 @@ class WebFrontendTests(unittest.TestCase):
             )
         calls = page.evaluate("window.bridgeCalls")
         self.assertEqual([call[0] for call in calls[-2:]], ["save_settings", "start_batch"])
+
+        page.evaluate("window.bridgeCalls = []")
+        page.locator("#open-output").click()
+        page.wait_for_function("window.bridgeCalls.some(call => call[0] === 'open_output_folder')")
+        self.assertEqual(page.evaluate("window.bridgeCalls"), [["open_output_folder"]])
 
         page.evaluate("window.batchTranslatorReceive({sequence:6,type:'process_started',payload:{mode:'main'}})")
         self.assertTrue(page.locator("body").evaluate("node => node.classList.contains('is-running')"))

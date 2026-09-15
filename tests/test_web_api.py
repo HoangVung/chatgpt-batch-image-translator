@@ -176,6 +176,19 @@ class WebApiTests(unittest.TestCase):
         self.assertFalse(self.api.save_settings({"theme": "neon"})["ok"])
         self.assertFalse(self.api.save_settings({"run_command": "calc"})["ok"])
 
+    def test_save_marks_intervention_only_when_run_configuration_changes(self):
+        self.assertTrue(self.api.start_batch("main")["ok"])
+
+        same_batch_size = self.api.settings["batch_size"]
+        self.assertTrue(self.api.save_settings({"batch_size": same_batch_size})["ok"])
+        self.assertFalse(self.api.controller.state.current_run_intervened)
+
+        self.assertTrue(self.api.save_settings({"theme": "dark"})["ok"])
+        self.assertFalse(self.api.controller.state.current_run_intervened)
+
+        self.assertTrue(self.api.save_settings({"batch_size": "11"})["ok"])
+        self.assertTrue(self.api.controller.state.current_run_intervened)
+
     def test_folder_kind_is_whitelisted(self):
         self.assertFalse(self.api.choose_folder("arbitrary")["ok"])
         self.api._attach_window(types.SimpleNamespace(create_file_dialog=lambda _kind: ["D:/picked"]))
