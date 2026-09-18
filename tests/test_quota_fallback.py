@@ -58,6 +58,27 @@ class QuotaDetectionTests(unittest.TestCase):
                     worker.get_generation_quota_evidence(BodyOnlyPage(sample))
                 )
 
+    def test_exact_english_quota_messages_are_detected(self):
+        samples = [
+            "You've hit the Business plan limit for image generations requests. You can create more images when the limit resets in 5 hours.",
+            "You've hit the Plus plan limit for image generations requests. You can create more images when the limit resets in 3 hours.",
+            "You have hit the Team plan limit for image generations requests.",
+            "You've hit the Enterprise plan limit for image generations requests.",
+            "You've reached the image generation limit.",
+            "You have reached your image generation limit.",
+            "You've run out of image generations.",
+            "You have run out of image generations.",
+            "You've reached the limit for image generation.",
+        ]
+
+        for sample in samples:
+            with self.subTest(sample=sample):
+                marker = worker.find_image_quota_marker(sample)
+                self.assertIsNotNone(marker)
+                self.assertIsNotNone(
+                    worker.get_generation_quota_evidence(BodyOnlyPage(sample))
+                )
+
     def test_quota_detector_ignores_unrelated_companion_sentences(self):
         for sample in (
             "Hãy thử lại vào lúc 12:05.",

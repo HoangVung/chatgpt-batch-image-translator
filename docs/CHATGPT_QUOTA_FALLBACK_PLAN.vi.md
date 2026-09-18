@@ -126,7 +126,7 @@ Phân biệt rõ “chờ tài khoản” với các exit code lỗi hiện tạ
 - Worker gửi sự kiện JSON riêng, ví dụ `account_quota_exhausted`, `account_switched`, `job_waiting`, gắn ID job/batch/ảnh/tài khoản. Bộ đếm không phân tích những dòng chữ tự do về lỗi quota.
 - GUI là nơi ghi cấu hình tài khoản; worker là nơi ghi điểm phục hồi của batch. Đồng bộ trạng thái qua sự kiện, tránh hai tiến trình cùng ghi đè `app_settings.json`.
 - Cập nhật tài khoản tự động không kích hoạt callback can thiệp thủ công hay hủy lịch auto-next. Batch có ảnh phục hồi thành công vẫn được tính là batch thành công như bình thường.
-- Việc dựng lại giao diện/đổi phong cách không làm mất tài khoản đang chạy, tiến trình, điểm phục hồi hay trạng thái chờ tài khoản.
+- Việc dựng lại giao diện/đổi theme sáng tối không làm mất tài khoản đang chạy, tiến trình, điểm phục hồi hay trạng thái chờ tài khoản.
 - Thêm tài khoản mới khi đang chờ sẽ được xét ở lượt tiếp tục; danh sách đang được worker sử dụng là snapshot ổn định cho đợt chuyển hiện tại.
 
 ## 6. Tối ưu bằng bản dịch đã lưu (giai đoạn sau)
@@ -159,7 +159,7 @@ Các ca bắt buộc:
 - Lỗi mạng, timeout, từ chối nội dung, hết hạn đăng nhập và thiếu quyền workspace không bị gán nhầm thành quota tạo ảnh.
 - Toàn bộ tài khoản bị chặn hoặc hết phiên: điểm phục hồi còn nguyên, không lặp vô hạn và không mất ảnh đang dở.
 - Dừng/đóng app giữa lúc chuyển hoặc ngay sau khi tải ảnh: khi tiếp tục không bỏ sót hay ghi đè nhầm kết quả; chế độ chạy lại một ảnh vẫn giữ đúng ý định.
-- Qua ranh giới batch, đổi phong cách hoặc mở lại app: trạng thái tài khoản bị quota không mất, tiến trình/auto-next không bị hủy bởi cập nhật nội bộ.
+- Qua ranh giới batch, đổi theme sáng tối hoặc mở lại app: trạng thái tài khoản bị quota không mất, tiến trình/auto-next không bị hủy bởi cập nhật nội bộ.
 
 Test điều phối dùng browser và đồng hồ giả để không tiêu quota. Test tích hợp dùng trang chat mô phỏng với DOM/thông báo đại diện. Đã có mẫu văn bản tiếng Việt do người dùng cung cấp để xây dựng fixture; chưa có xác minh DOM live trong lượt này, nên chưa coi đó là bằng chứng detector chạy đúng trên ChatGPT thật. Mẫu tiếng Anh cần bổ sung riêng. Không cố dùng hết quota để kiểm thử.
 

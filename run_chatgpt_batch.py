@@ -6,6 +6,7 @@ import json
 import base64
 import functools
 import html
+import re
 import tempfile
 import unicodedata
 from io import BytesIO
@@ -182,13 +183,77 @@ PROMPT_TAO_ANH = "Tạo ảnh với bản dịch"
 IMAGE_QUOTA_MARKERS = (
     "Bạn đã hết lượt tạo hình ảnh",
     "Bạn hiện đã hết lượt tạo ảnh",
+    "Bạn đã hết lượt tạo ảnh",
     "Bạn đã đạt giới hạn yêu cầu tạo ảnh",
+    "Bạn đã đạt đến giới hạn tạo ảnh",
+    "Bạn đã đạt giới hạn tạo ảnh",
+    "Bạn đã dùng hết lượt tạo ảnh",
+    "Bạn đã hết hạn mức tạo ảnh",
+    "Bạn đã chạm giới hạn tạo ảnh",
+    "đã hết lượt tạo hình ảnh",
+    "đã hết lượt tạo ảnh",
+    "hết lượt tạo hình ảnh",
+    "hết lượt tạo ảnh",
+    "đạt giới hạn yêu cầu tạo ảnh",
+    "đạt giới hạn tạo ảnh",
+    "giới hạn yêu cầu tạo ảnh",
+    "hạn mức tạo ảnh",
+    "hit the Business plan limit for image",
+    "hit the Plus plan limit for image",
+    "hit the Team plan limit for image",
+    "hit the Enterprise plan limit for image",
+    "hit the Pro plan limit for image",
+    "hit the Free plan limit for image",
+    "hit the plan limit for image",
+    "hit your plan limit for image",
+    "plan limit for image generations requests",
+    "plan limit for image generation requests",
+    "limit for image generations requests",
+    "limit for image generation requests",
+    "limit for image generations",
+    "limit for image generation",
+    "image generation limit",
+    "image generations limit",
     "You've run out of image generations",
     "You have run out of image generations",
+    "run out of image generations",
+    "run out of image generation",
     "You've reached the image generation limit",
     "You have reached the image generation limit",
     "You've reached your image generation limit",
     "You have reached your image generation limit",
+    "You've reached the image generations limit",
+    "You have reached the image generations limit",
+    "You've reached your image generations limit",
+    "You have reached your image generations limit",
+    "reached the image generation limit",
+    "reached the image generations limit",
+    "reached your image generation limit",
+    "reached your image generations limit",
+    "reached the limit for image generation",
+    "reached the limit for image generations",
+    "reached your limit for image generation",
+    "reached your limit for image generations",
+    "hit the image generation limit",
+    "hit your image generation limit",
+    "hit the image generations limit",
+    "hit your image generations limit",
+    "hit the limit for image generation",
+    "hit the limit for image generations",
+    "hit your limit for image generation",
+    "hit your limit for image generations",
+)
+
+IMAGE_QUOTA_PATTERNS = (
+    re.compile(r"(?:hit|reached|exceeded)\s+(?:the\s+|your\s+)?(?:\w+\s+)?plan\s+limit\s+for\s+image", re.IGNORECASE),
+    re.compile(r"(?:hit|reached|exceeded|at)\s+(?:the\s+|your\s+)?limit\s+for\s+image\s+generation", re.IGNORECASE),
+    re.compile(r"limit\s+for\s+image\s+generation", re.IGNORECASE),
+    re.compile(r"image\s+generations?\s+limit", re.IGNORECASE),
+    re.compile(r"run\s+out\s+of\s+image\s+generation", re.IGNORECASE),
+    re.compile(r"(?:bạn\s+)?(?:hiện\s+đã|đã)\s+hết\s+lượt\s+tạo\s+(?:hình\s+)?ảnh", re.IGNORECASE),
+    re.compile(r"(?:bạn\s+)?(?:đã\s+)?(?:đạt|chạm)(?:\s+đến)?\s+giới\s+hạn\s+(?:yêu\s+cầu\s+)?tạo\s+ảnh", re.IGNORECASE),
+    re.compile(r"(?:bạn\s+)?đã\s+dùng\s+hết\s+lượt\s+tạo\s+ảnh", re.IGNORECASE),
+    re.compile(r"(?:bạn\s+)?(?:đã\s+)?hết\s+hạn\s+mức\s+tạo\s+ảnh", re.IGNORECASE),
 )
 
 IMAGE_EXTS = [".png", ".jpg", ".jpeg", ".webp"]
@@ -704,8 +769,7 @@ def wait_existing_chatgpt_session(page, timeout=30):
     """Check a prepared profile without pausing for manual login."""
     start = time.time()
     while time.time() - start < timeout:
-        if is_cloudflare(page) or has_signin_prompt(page):
-            return False
+        wait_if_cloudflare(page)
 
         try:
             prompt = get_prompt_locator(page)
@@ -713,6 +777,10 @@ def wait_existing_chatgpt_session(page, timeout=30):
                 return True
         except Exception:
             pass
+
+        # Cho phép một khoảng đệm 4 giây để Next.js/React hydrate phiên cookie trước khi kết luận là chưa login
+        if time.time() - start >= 4 and has_signin_prompt(page):
+            return False
 
         sleep(1)
     return False
@@ -1467,13 +1535,13 @@ def has_new_assistant_response(page, before_signature):
     current_len = int(current.get("last_len") or 0)
     current_tail = current.get("last_tail") or ""
 
-    if current_count > before_count and current_len >= 20:
+    if current_count > before_count and current_len > 0:
         return True
 
-    if current_count >= before_count and current_len >= 20:
+    if current_count >= before_count and current_len > 0:
         if current_tail and current_tail != before_tail:
             return True
-        if current_len > before_len + 20:
+        if current_len > before_len:
             return True
 
     return False
@@ -1492,6 +1560,10 @@ def find_image_quota_marker(text):
         normalized_marker = normalize_notice_text(marker)
         if normalized_marker in normalized:
             return marker
+    for pattern in IMAGE_QUOTA_PATTERNS:
+        match = pattern.search(normalized)
+        if match:
+            return match.group(0)
     return None
 
 
@@ -1566,17 +1638,29 @@ def wait_assistant_response_stable(page, before_signature, stable_seconds=6, tim
     start = time.time()
     last_signature = None
     stable_start = None
+    last_log = 0
 
     while time.time() - start < timeout:
         wait_if_cloudflare(page)
 
-        if is_generating(page):
+        generating = is_generating(page)
+        has_new = has_new_assistant_response(page, before_signature)
+
+        if generating:
             stable_start = None
             last_signature = None
+            if time.time() - last_log >= 30:
+                elapsed = int(time.time() - start)
+                print(f"  ⏳ ChatGPT đang xử lý phản hồi... ({elapsed}s)")
+                last_log = time.time()
             sleep(2)
             continue
 
-        if not has_new_assistant_response(page, before_signature):
+        if not has_new:
+            if time.time() - last_log >= 30:
+                elapsed = int(time.time() - start)
+                print(f"  ⏳ Chờ phản hồi mới xuất hiện... ({elapsed}s)")
+                last_log = time.time()
             sleep(2)
             continue
 
@@ -1589,6 +1673,7 @@ def wait_assistant_response_stable(page, before_signature, stable_seconds=6, tim
 
         if comparable == last_signature:
             if stable_start and time.time() - stable_start >= stable_seconds:
+                print("  ✓ Phản hồi ChatGPT đã hoàn tất và ổn định")
                 return True
         else:
             last_signature = comparable
@@ -1596,6 +1681,7 @@ def wait_assistant_response_stable(page, before_signature, stable_seconds=6, tim
 
         sleep(1)
 
+    print("⚠ Quá thời gian chờ phản hồi ChatGPT ổn định")
     return False
 
 

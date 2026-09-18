@@ -13,15 +13,21 @@
     <div class="ambient ambient-two" aria-hidden="true"></div>
 
     <header class="titlebar" role="banner">
-      <div class="traffic-lights" data-window-drag="no">
-        <button class="tl tl-close"    type="button" aria-label="Close window"    data-action="close-window"></button>
-        <button class="tl tl-minimize" type="button" aria-label="Minimize window" data-action="minimize-window"></button>
-        <button class="tl tl-zoom"     type="button" aria-label="Zoom window"     data-action="toggle-maximize-window"></button>
-      </div>
+      <div class="titlebar-spacer" aria-hidden="true"></div>
       <div class="titlebar-title" id="window-title">ChatGPT Batch Translator</div>
-      <div class="titlebar-actions" data-window-drag="no">
-        <span id="status" class="status-pill" role="status" aria-live="polite"><span class="status-dot" aria-hidden="true"></span><span class="status-copy">Connecting…</span></span>
+      <div class="window-controls traffic-lights titlebar-actions" data-window-drag="no">
+        <button class="tl tl-minimize" type="button" aria-label="Minimize window" title="Thu nhỏ" data-action="minimize-window">
+          <svg width="10" height="10" viewBox="0 0 10 10" fill="none" aria-hidden="true"><path d="M 0 5 L 10 5" stroke="currentColor" stroke-width="1" /></svg>
+        </button>
+        <button class="tl tl-zoom" type="button" aria-label="Maximize window" title="Phóng to" data-action="toggle-maximize-window">
+          <svg class="icon-maximize" width="10" height="10" viewBox="0 0 10 10" fill="none" aria-hidden="true"><rect x="0.5" y="0.5" width="9" height="9" stroke="currentColor" stroke-width="1" /></svg>
+          <svg class="icon-restore" width="10" height="10" viewBox="0 0 10 10" fill="none" aria-hidden="true" style="display: none;"><path d="M 2.5 2.5 V 0.5 H 9.5 V 7.5 H 7.5" stroke="currentColor" stroke-width="1" /><rect x="0.5" y="2.5" width="7" height="7" stroke="currentColor" stroke-width="1" /></svg>
+        </button>
+        <button class="tl tl-close" type="button" aria-label="Close window" title="Đóng" data-action="close-window">
+          <svg width="10" height="10" viewBox="0 0 10 10" fill="none" aria-hidden="true"><path d="M 1 1 L 9 9 M 9 1 L 1 9" stroke="currentColor" stroke-width="1.1" /></svg>
+        </button>
       </div>
+      <span id="status" class="status-pill" hidden aria-hidden="true" style="display:none"><span class="status-dot" aria-hidden="true"></span><span class="status-copy">Connecting…</span></span>
     </header>
 
     <div class="shell">

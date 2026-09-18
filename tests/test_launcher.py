@@ -1,3 +1,4 @@
+import ctypes
 import io
 import runpy
 import sys
@@ -135,12 +136,17 @@ class LauncherTests(unittest.TestCase):
         window = SimpleNamespace(events=SimpleNamespace(
             initialized=EventHook(), loaded=EventHook(), closed=EventHook()
         ))
+        create_kwargs = {}
         start_kwargs = {}
+
+        def create_window(*args, **kwargs):
+            create_kwargs.update(kwargs)
+            return window
 
         def start(**kwargs):
             start_kwargs.update(kwargs)
 
-        fake_webview = SimpleNamespace(create_window=lambda *args, **kwargs: window, start=start)
+        fake_webview = SimpleNamespace(create_window=create_window, start=start)
 
         with (
             patch.object(webview_app, "WebApi", FakeApi),
@@ -151,6 +157,94 @@ class LauncherTests(unittest.TestCase):
 
         set_identity.assert_called_once_with()
         self.assertEqual(start_kwargs["icon"], str(webview_app.WINDOWS_ICON_FILE))
+        self.assertNotIn("easy_drag", start_kwargs)
+        self.assertEqual(create_kwargs.get("easy_drag"), sys.platform != "darwin")
+
+    def test_webview_wires_taskbar_minimize_on_load_and_show(self):
+        window = SimpleNamespace(events=SimpleNamespace(
+            initialized=EventHook(), loaded=EventHook(), shown=EventHook(), closed=EventHook()
+        ))
+        fake_webview = SimpleNamespace(
+            create_window=lambda *args, **kwargs: window,
+            start=lambda **kwargs: None,
+        )
+
+        with (
+            patch.object(webview_app, "WebApi", FakeApi),
+            patch.object(webview_app, "set_windows_app_user_model_id"),
+            patch.object(webview_app, "enable_windows_taskbar_minimize") as mock_enable,
+            patch.dict(sys.modules, {"webview": fake_webview}),
+        ):
+            webview_app.run_webview()
+            for handler in window.events.loaded.handlers:
+                handler()
+            for handler in window.events.shown.handlers:
+                handler()
+
+        self.assertEqual(mock_enable.call_count, 2)
+        mock_enable.assert_called_with(window)
+
+    def test_enable_windows_taskbar_minimize_logic(self):
+        from desktop.window_identity import (
+            enable_windows_taskbar_minimize,
+            WS_MINIMIZEBOX,
+            WS_SYSMENU,
+        )
+
+        # 1. Non-windows returns False
+        with patch.object(sys, "platform", "darwin"):
+            self.assertFalse(enable_windows_taskbar_minimize(12345))
+
+        # 2. None / invalid target returns False
+        with patch.object(sys, "platform", "win32"):
+            self.assertFalse(enable_windows_taskbar_minimize(None))
+            self.assertFalse(enable_windows_taskbar_minimize(SimpleNamespace()))
+
+        # 3. Valid hwnd updates styles with WS_MINIMIZEBOX and WS_SYSMENU
+        styles = [0x16010000]
+        pos_calls = []
+
+        def mock_get(hwnd, index):
+            return styles[0]
+
+        def mock_set(hwnd, index, new_style):
+            styles[0] = new_style
+            return new_style
+
+        def mock_set_pos(hwnd, after, x, y, cx, cy, flags):
+            pos_calls.append(flags)
+            return 1
+
+        mock_user32 = SimpleNamespace(
+            GetWindowLongPtrW=mock_get,
+            SetWindowLongPtrW=mock_set,
+            SetWindowPos=mock_set_pos,
+        )
+
+        with (
+            patch.object(sys, "platform", "win32"),
+            patch.object(ctypes.windll, "user32", mock_user32, create=True),
+        ):
+            # Target as int
+            result = enable_windows_taskbar_minimize(1001)
+            self.assertTrue(result)
+            self.assertTrue(styles[0] & WS_MINIMIZEBOX)
+            self.assertTrue(styles[0] & WS_SYSMENU)
+            self.assertEqual(len(pos_calls), 1)
+
+            # Idempotent call
+            result2 = enable_windows_taskbar_minimize(1001)
+            self.assertTrue(result2)
+            self.assertEqual(len(pos_calls), 1)  # No extra SetWindowPos
+
+            # Target as object with .native.Handle (IntPtr simulator)
+            class MockIntPtr:
+                def ToInt64(self):
+                    return 2002
+
+            mock_win = SimpleNamespace(native=SimpleNamespace(Handle=MockIntPtr()))
+            result3 = enable_windows_taskbar_minimize(mock_win)
+            self.assertTrue(result3)
 
 
 if __name__ == "__main__":

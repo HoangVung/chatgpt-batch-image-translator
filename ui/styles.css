@@ -686,7 +686,7 @@ button:focus-visible,
   min-width: 0;
 }
 
-button,
+button:not(.tl),
 .button {
   min-height: 38px;
   padding: 0 13px;
@@ -700,17 +700,17 @@ button,
   transition: transform var(--transition-fast), color var(--transition-fast), background var(--transition-fast), border-color var(--transition-fast), box-shadow var(--transition-fast), opacity var(--transition-fast);
 }
 
-button:hover:not(:disabled) {
+button:not(.tl):hover:not(:disabled) {
   border-color: color-mix(in srgb, var(--accent) 22%, var(--divider));
   background: var(--bg-control-hover);
   transform: translateY(-1px);
 }
 
-button:active:not(:disabled) {
+button:not(.tl):active:not(:disabled) {
   transform: translateY(0) scale(0.985);
 }
 
-button:disabled {
+button:not(.tl):disabled {
   cursor: not-allowed;
   opacity: 0.42;
   filter: saturate(0.45);
@@ -1176,10 +1176,10 @@ body {
   top: 0; left: 0; right: 0;
   z-index: 1000;
   display: grid;
-  grid-template-columns: 96px 1fr 96px;
-  align-items: center;
+  grid-template-columns: 138px 1fr 138px;
+  align-items: stretch;
   height: 38px;
-  padding: 0 12px;
+  padding: 0;
   background: linear-gradient(180deg,
               color-mix(in srgb, var(--bg-panel-strong) 78%, transparent),
               color-mix(in srgb, var(--bg-panel-strong) 56%, transparent));
@@ -1190,9 +1190,11 @@ body {
 }
 
 .titlebar-title {
+  display: flex;
+  align-items: center;
+  justify-content: center;
   text-align: center;
-  font: 600 12.5px/1 -apple-system, BlinkMacSystemFont, "SF Pro Text",
-                 "Segoe UI Variable", "Segoe UI", sans-serif;
+  font: 600 12.5px/1 -apple-system, BlinkMacSystemFont, "Segoe UI Variable", "Segoe UI", sans-serif;
   letter-spacing: 0.005em;
   color: var(--text-secondary);
   pointer-events: none; /* let easy_drag drag through the title text */
@@ -1201,8 +1203,8 @@ body {
 .titlebar-actions {
   display: flex;
   justify-content: flex-end;
-  align-items: center;
-  gap: 8px;
+  align-items: stretch;
+  height: 100%;
 }
 
 /* Compact status pill when it lives in the titlebar. */
@@ -1212,55 +1214,103 @@ body {
   font-size: 11px;
 }
 
-/* ----- Traffic lights ------------------------------------------------ */
+.titlebar-spacer {
+  height: 100%;
+}
+
+/* ----- Window controls (Windows 11 caption buttons) ---------------- */
 .traffic-lights {
   display: flex;
-  align-items: center;
-  gap: 8px;
+  align-items: stretch;
+  justify-content: flex-end;
+  gap: 0;
+  margin: 0;
+  padding: 0;
+  height: 100%;
 }
 
-.tl {
-  width: 12px;
-  height: 12px;
+.traffic-lights .tl {
+  width: 46px;
+  height: 100%;
+  min-width: 46px;
+  max-width: 46px;
+  min-height: 100%;
+  max-height: 100%;
+  aspect-ratio: auto;
   padding: 0;
+  margin: 0;
   border: 0;
-  border-radius: 50%;
+  border-radius: 0;
   cursor: pointer;
   position: relative;
-  box-shadow:
-    inset 0 0 0 0.5px rgba(0, 0, 0, 0.18),
-    inset 0 1px 0 rgba(255, 255, 255, 0.35);
-  transition: width 120ms ease, height 120ms ease, transform 120ms ease;
+  box-sizing: border-box;
+  flex: 0 0 46px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+  background: transparent;
+  color: var(--text-primary);
+  transform: none;
+  box-shadow: none;
+  transition: background-color 100ms ease, color 100ms ease;
+  -webkit-appearance: none;
+  appearance: none;
 }
 
-.tl-close    { background: #ff5f57; }
-.tl-minimize { background: #febc2e; }
-.tl-zoom     { background: #28c840; }
-
-/* Hover reveals the iconic glyph inside the dot. */
-.tl::before {
-  position: absolute;
-  inset: 0;
-  display: grid;
-  place-items: center;
-  font: 700 10px/1 -apple-system, "SF Pro Text", system-ui, sans-serif;
-  opacity: 0;
-  transition: opacity 90ms ease;
+.traffic-lights .tl svg {
+  display: block;
+  pointer-events: none;
 }
-.tl-close::before    { content: "\00d7"; color: #5e0000; font-size: 11px; }
-.tl-minimize::before { content: "\2212"; color: #5a3700; font-size: 13px; }
-.tl-zoom::before     { content: "+";     color: #0a4d1a; font-size: 12px; font-weight: 800; }
 
-.tl:hover {
-  width: 14px;
-  height: 14px;
+/* Hover & Active states for Minimize & Maximize/Restore */
+.traffic-lights .tl-minimize:hover:not(:disabled),
+.traffic-lights .tl-zoom:hover:not(:disabled) {
+  background: color-mix(in srgb, currentColor 9%, transparent);
+  color: var(--text-primary);
+  transform: none;
+  filter: none;
 }
-.tl:hover::before { opacity: 1; }
-.tl:active { transform: scale(0.94); }
-.tl:focus-visible {
-  outline: none;
-  box-shadow: 0 0 0 3px var(--focus-ring),
-              inset 0 0 0 0.5px rgba(0, 0, 0, 0.18);
+
+.traffic-lights .tl-minimize:active:not(:disabled),
+.traffic-lights .tl-zoom:active:not(:disabled) {
+  background: color-mix(in srgb, currentColor 18%, transparent);
+  color: var(--text-primary);
+  transform: none;
+  filter: none;
+}
+
+/* Close button - Windows 11 Fluent Red */
+.traffic-lights .tl-close:hover:not(:disabled) {
+  background: #c42b1c;
+  color: #ffffff;
+  transform: none;
+  filter: none;
+}
+
+.traffic-lights .tl-close:active:not(:disabled) {
+  background: #b22216;
+  color: #ffffff;
+  transform: none;
+  filter: none;
+}
+
+.traffic-lights .tl:focus-visible {
+  outline: 1px solid var(--focus-ring);
+  outline-offset: -1px;
+}
+
+/* Maximize vs Restore state icon toggle */
+.traffic-lights .tl svg.icon-restore {
+  display: none !important;
+}
+
+body.is-maximized .traffic-lights .tl svg.icon-maximize {
+  display: none !important;
+}
+
+body.is-maximized .traffic-lights .tl svg.icon-restore {
+  display: block !important;
 }
 
 /* ----- Brand mark squircle (macOS Big Sur+ app icon shape) ---------- */
@@ -1321,13 +1371,20 @@ body.is-running .status-dot {
   opacity: 1;
 }
 
-/* ----- Select chevron: cleaner inline SVG ---------------------------- */
+/* ----- Select chevron: macOS popup double-chevron dropdown button ----- */
 select {
-  background-image: url("data:image/svg+xml;utf8,<svg viewBox='0 0 8 5'><path d='M0 0l4 5 4-5z' fill='%23778397'/></svg>");
+  background-image: url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0naHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmcnIHdpZHRoPSc4JyBoZWlnaHQ9JzEyJyB2aWV3Qm94PScwIDAgOCAxMicgZmlsbD0nbm9uZSc+PHBhdGggZD0nTTEuNSA0LjVMNCAyTDYuNSA0LjUnIHN0cm9rZT0nIzY2NzU4YScgc3Ryb2tlLXdpZHRoPScxLjUnIHN0cm9rZS1saW5lY2FwPSdyb3VuZCcgc3Ryb2tlLWxpbmVqb2luPSdyb3VuZCcvPjxwYXRoIGQ9J00xLjUgNy41TDQgMTBMNi41IDcuNScgc3Ryb2tlPScjNjY3NThhJyBzdHJva2Utd2lkdGg9JzEuNScgc3Ryb2tlLWxpbmVjYXA9J3JvdW5kJyBzdHJva2UtbGluZWpvaW49J3JvdW5kJy8+PC9zdmc+");
   background-repeat: no-repeat;
   background-position: right 11px center;
-  background-size: 8px 5px;
-  padding-right: 28px;
+  background-size: 8px 12px;
+  padding-right: 30px;
+}
+
+:root[data-theme="dark"] select,
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) select {
+    background-image: url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0naHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmcnIHdpZHRoPSc4JyBoZWlnaHQ9JzEyJyB2aWV3Qm94PScwIDAgOCAxMicgZmlsbD0nbm9uZSc+PHBhdGggZD0nTTEuNSA0LjVMNCAyTDYuNSA0LjUnIHN0cm9rZT0nIzljYWJjMCcgc3Ryb2tlLXdpZHRoPScxLjUnIHN0cm9rZS1saW5lY2FwPSdyb3VuZCcgc3Ryb2tlLWxpbmVqb2luPSdyb3VuZCcvPjxwYXRoIGQ9J00xLjUgNy41TDQgMTBMNi41IDcuNScgc3Ryb2tlPScjOWNhYmMwJyBzdHJva2Utd2lkdGg9JzEuNScgc3Ryb2tlLWxpbmVjYXA9J3JvdW5kJyBzdHJva2UtbGluZWpvaW49J3JvdW5kJy8+PC9zdmc+");
+  }
 }
 
 /* ----- Subtle scrollbar polish -------------------------------------- */

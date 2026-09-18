@@ -541,12 +541,14 @@ class WebApi:
         try:
             if self.window is None:
                 raise RuntimeError("window is not attached")
-            # pywebview 6.x exposes maximize()/restore(); we keep the last restored
-            # state so the user can snap back to where they were before zooming.
-            if not hasattr(self, "_pre_zoom_state"):
-                self._pre_zoom_state: dict[str, int] | None = None
-                self._is_zoomed: bool = False
-            if not self._is_zoomed:
+            is_max = False
+            native = getattr(self.window, "native", None)
+            if native is not None and hasattr(native, "WindowState"):
+                is_max = str(native.WindowState).lower() == "maximized"
+            elif hasattr(self, "_is_zoomed"):
+                is_max = bool(self._is_zoomed)
+
+            if not is_max:
                 try:
                     self._pre_zoom_state = {
                         "x": int(self.window.x),
@@ -560,7 +562,7 @@ class WebApi:
                 self._is_zoomed = True
             else:
                 self.window.restore()
-                pre = self._pre_zoom_state
+                pre = getattr(self, "_pre_zoom_state", None)
                 if pre is not None:
                     try:
                         self.window.move(pre["x"], pre["y"])
@@ -577,7 +579,12 @@ class WebApi:
         try:
             if self.window is None:
                 raise RuntimeError("window is not attached")
-            self.window.close()
+            if hasattr(self.window, "destroy") and callable(self.window.destroy):
+                self.window.destroy()
+            elif hasattr(self.window, "close") and callable(self.window.close):
+                self.window.close()
+            else:
+                raise AttributeError("Window has neither destroy nor close method")
             return success({"closed": True})
         except Exception as exc:
             return failure(exc)

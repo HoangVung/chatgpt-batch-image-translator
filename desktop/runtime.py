@@ -24,7 +24,6 @@ SETTINGS_KEYS = {
     "auto_next_enabled",
     "auto_next_delay_minutes",
     "theme",
-    "ui_style",
     "language",
     "service",
 }
@@ -74,7 +73,6 @@ def make_default_settings(data_dir: Path) -> dict[str, Any]:
         "auto_next_enabled": True,
         "auto_next_delay_minutes": "2",
         "theme": "system",
-        "ui_style": "classic",
         "language": "vi",
         "service": "chatgpt",
     }
@@ -93,6 +91,7 @@ def load_settings(path: Path, defaults: Mapping[str, Any]) -> dict[str, Any]:
             saved = json.loads(path.read_text(encoding="utf-8"))
             if not isinstance(saved, dict):
                 raise ValueError("settings root must be an object")
+            saved.pop("ui_style", None)
             settings = {**copy_default_settings(defaults), **saved}
             if "chatgpt_accounts" not in saved:
                 settings["chatgpt_accounts"] = []
