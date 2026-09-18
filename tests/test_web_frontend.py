@@ -89,7 +89,10 @@ class WebFrontendTests(unittest.TestCase):
             add_account: (name) => { bridgeCalls.push(['add_account', name]); return ok({accounts:initial.settings.chatgpt_accounts,active_id:'business'}); },
             rename_account: (id, name) => { bridgeCalls.push(['rename_account', id, name]); return ok({accounts:initial.settings.chatgpt_accounts,active_id:id}); },
             remove_account: (id) => { bridgeCalls.push(['remove_account', id]); return ok({accounts:initial.settings.chatgpt_accounts.filter(a => a.id !== id),active_id:'default'}); },
-            login_account: () => ok()
+            login_account: () => ok(),
+            close_window: () => { bridgeCalls.push(['close_window']); return ok(); },
+            minimize_window: () => { bridgeCalls.push(['minimize_window']); return ok(); },
+            toggle_maximize_window: () => { bridgeCalls.push(['toggle_maximize_window']); return ok(); }
           }};
         """ % json.dumps(json.dumps(initial, ensure_ascii=False))
         page.add_init_script(bootstrap)
@@ -235,6 +238,95 @@ class WebFrontendTests(unittest.TestCase):
         )
         page.wait_for_function("document.querySelector('#log').textContent.includes('realtime log')")
         self.assertEqual(page.locator("#log").text_content(), "snapshot log\nrealtime log\n")
+        page.close()
+
+    def test_macos_window_controls_and_select_styles(self):
+        page = self.browser.new_page()
+        initial = {
+            "settings": {
+                "image_folder": "D:/source", "download_folder": "D:/output", "profile_dir": "D:/profile",
+                "gemini_profile_dir": "D:/gemini", "chatgpt_accounts": [
+                    {"id": "default", "name": "ChatGPT 1", "profile_dir": "D:/profile"},
+                ],
+                "active_chatgpt_account_id": "default", "auto_account_fallback_enabled": True,
+                "batch_size": "1", "start_from": "", "auto_next_enabled": False,
+                "auto_next_delay_minutes": "2", "theme": "light", "language": "vi", "service": "chatgpt",
+            },
+            "controller": {
+                "running": False, "progress_done": 0, "progress_total": 0,
+                "manual_action_required": False, "log_history": "",
+                "status": {"key": "ready", "params": {}}, "sequence": 0,
+            },
+            "localization": WEB_TEXT,
+            "capabilities": {"webview_backend": "fake-webview2"},
+        }
+        bootstrap = """
+          window.bridgeCalls = [];
+          const initial = JSON.parse(%s);
+          const ok = (data={}) => Promise.resolve({ok:true, data});
+          window.pywebview = {api: {
+            get_initial_state: () => ok(initial),
+            save_settings: (payload) => { bridgeCalls.push(['save_settings', payload]); Object.assign(initial.settings, payload); return ok({settings: initial.settings}); },
+            close_window: () => { bridgeCalls.push(['close_window']); return ok(); },
+            minimize_window: () => { bridgeCalls.push(['minimize_window']); return ok(); },
+            toggle_maximize_window: () => { bridgeCalls.push(['toggle_maximize_window']); return ok(); }
+          }};
+        """ % json.dumps(json.dumps(initial, ensure_ascii=False))
+        page.add_init_script(bootstrap)
+        page.goto((PROJECT_ROOT / "ui" / "index.html").as_uri())
+        page.wait_for_function("document.querySelector('#status').textContent === 'Sẵn sàng'")
+        page.wait_for_selector(".traffic-lights")
+
+        # Verify close button click calls close_window
+        page.locator(".traffic-lights .tl-close").click()
+        page.wait_for_function("window.bridgeCalls.some(call => call[0] === 'close_window')")
+
+        # Verify minimize button click calls minimize_window
+        page.locator(".traffic-lights .tl-minimize").click()
+        page.wait_for_function("window.bridgeCalls.some(call => call[0] === 'minimize_window')")
+
+        # Verify zoom button click calls toggle_maximize_window
+        page.locator(".traffic-lights .tl-zoom").click()
+        page.wait_for_function("window.bridgeCalls.some(call => call[0] === 'toggle_maximize_window')")
+
+        # Verify double clicking titlebar calls toggle_maximize_window
+        page.locator(".titlebar").dblclick()
+        page.wait_for_function("window.bridgeCalls.filter(call => call[0] === 'toggle_maximize_window').length >= 2")
+
+        # Verify select dropdown background SVG image is valid base64 and loads
+        light_select_img = page.evaluate("""() => {
+            return new Promise(resolve => {
+                const el = document.querySelector('#account-select');
+                const bg = getComputedStyle(el).backgroundImage;
+                const match = bg.match(/url\\(["']?(.*?)["']?\\)/);
+                if (!match) return resolve({ok: false, reason: 'no url match'});
+                const img = new Image();
+                img.onload = () => resolve({ok: true, w: img.naturalWidth, h: img.naturalHeight, src: match[1]});
+                img.onerror = () => resolve({ok: false, reason: 'image error'});
+                img.src = match[1];
+            });
+        }""")
+        self.assertTrue(light_select_img["ok"])
+        self.assertIn("data:image/svg+xml;base64", light_select_img["src"])
+
+        # Switch to dark theme and verify dark select arrow
+        page.locator("#theme").select_option("dark")
+        page.wait_for_function("document.documentElement.dataset.theme === 'dark'")
+        dark_select_img = page.evaluate("""() => {
+            return new Promise(resolve => {
+                const el = document.querySelector('#account-select');
+                const bg = getComputedStyle(el).backgroundImage;
+                const match = bg.match(/url\\(["']?(.*?)["']?\\)/);
+                if (!match) return resolve({ok: false, reason: 'no url match'});
+                const img = new Image();
+                img.onload = () => resolve({ok: true, w: img.naturalWidth, h: img.naturalHeight, src: match[1]});
+                img.onerror = () => resolve({ok: false, reason: 'image error'});
+                img.src = match[1];
+            });
+        }""")
+        self.assertTrue(dark_select_img["ok"])
+        self.assertIn("data:image/svg+xml;base64", dark_select_img["src"])
+
         page.close()
 
 

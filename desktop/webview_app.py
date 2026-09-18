@@ -10,7 +10,10 @@ if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from desktop.web_api import WebApi
-from desktop.window_identity import set_windows_app_user_model_id
+from desktop.window_identity import (
+    enable_windows_taskbar_minimize,
+    set_windows_app_user_model_id,
+)
 
 
 RESOURCE_ROOT = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parents[1]))
@@ -160,6 +163,7 @@ def run_webview() -> None:
             background_color="#E8EEF7",
             vibrancy=sys.platform == "darwin",
             text_select=True,
+            easy_drag=sys.platform != "darwin",
         )
         if window is None:
             raise RuntimeError("pywebview did not create a window")
@@ -171,13 +175,19 @@ def run_webview() -> None:
             api._set_renderer(renderer)
 
         def on_loaded():
+            enable_windows_taskbar_minimize(window)
             api._start_dispatcher()
+
+        def on_shown():
+            enable_windows_taskbar_minimize(window)
 
         def on_closed():
             api._shutdown()
 
         window.events.initialized += on_initialized
         window.events.loaded += on_loaded
+        if hasattr(window.events, "shown"):
+            window.events.shown += on_shown
         window.events.closed += on_closed
         icon = str(WINDOWS_ICON_FILE) if WINDOWS_ICON_FILE.is_file() else None
         # easy_drag=True lets the user drag the frameless window from any empty
@@ -186,7 +196,6 @@ def run_webview() -> None:
             http_server=True,
             private_mode=True,
             icon=icon,
-            easy_drag=sys.platform != "darwin",
         )
     except Exception as exc:
         if not initialized:

@@ -232,6 +232,30 @@ class CompletionTests(unittest.TestCase):
                 )
             )
 
+    def test_has_new_assistant_response_accepts_short_response(self):
+        before = {"count": 0, "last_len": 0, "last_tail": ""}
+        current = {"count": 1, "last_len": 4, "last_tail": "模拟试题"}
+        with patch.object(worker, "get_assistant_response_signature", return_value=current):
+            self.assertTrue(worker.has_new_assistant_response(None, before))
+
+    def test_has_new_assistant_response_detects_new_turn_short_translation(self):
+        before = {"count": 1, "last_len": 4, "last_tail": "模拟试题"}
+        current = {"count": 2, "last_len": 10, "last_tail": "ĐỀ THI THỬ"}
+        with patch.object(worker, "get_assistant_response_signature", return_value=current):
+            self.assertTrue(worker.has_new_assistant_response(None, before))
+
+    def test_has_new_assistant_response_detects_text_growth_in_same_turn(self):
+        before = {"count": 1, "last_len": 4, "last_tail": "模拟试题"}
+        current = {"count": 1, "last_len": 8, "last_tail": "模拟试题答案"}
+        with patch.object(worker, "get_assistant_response_signature", return_value=current):
+            self.assertTrue(worker.has_new_assistant_response(None, before))
+
+    def test_has_new_assistant_response_rejects_unchanged_signature(self):
+        before = {"count": 1, "last_len": 4, "last_tail": "模拟试题"}
+        current = {"count": 1, "last_len": 4, "last_tail": "模拟试题"}
+        with patch.object(worker, "get_assistant_response_signature", return_value=current):
+            self.assertFalse(worker.has_new_assistant_response(None, before))
+
     def test_new_image_waits_until_generation_has_stopped_and_stabilized(self):
         clock = Clock()
         generating = iter([True, False, False])
@@ -438,87 +462,6 @@ class ApplicationStateTests(unittest.TestCase):
             app.auto_next_delay_var.set(value)
             with self.assertRaises(ValueError):
                 app.get_auto_next_delay_seconds()
-
-
-class UiStyleTests(unittest.TestCase):
-    def make_app(self, style="golden_gate", theme="light"):
-        app = App.__new__(App)
-        app.settings = app_namespace["DEFAULT_SETTINGS"].copy()
-        app.settings.update({"ui_style": style, "theme": theme})
-        return app
-
-    def test_golden_gate_palette_has_all_widget_colors(self):
-        app = self.make_app()
-        palette = app.get_palette()
-        required = {
-            "app_bg", "chrome_bg", "card_bg", "input_bg", "log_bg", "text",
-            "muted", "field", "border", "gray_btn", "gray_btn_active",
-            "gray_btn_pressed", "scroll_track", "scroll_thumb", "scroll_arrow",
-            "selection", "accent", "accent_hover", "accent_pressed", "accent_text",
-            "danger", "danger_hover", "danger_pressed", "disabled_bg", "disabled_text"
-        }
-        self.assertTrue(required.issubset(palette))
-        self.assertEqual(app.style_code(), "golden_gate")
-        classic = self.make_app(style="classic").get_palette()
-        self.assertNotEqual(palette["app_bg"], classic["app_bg"])
-
-    def test_style_change_does_not_cancel_auto_next_or_replace_worker(self):
-        app = self.make_app(style="classic")
-        class Frame:
-            def __init__(self):
-                self.visible = False
-
-            def grid(self):
-                self.visible = True
-
-            def grid_remove(self):
-                self.visible = False
-
-        class Canvas:
-            def __init__(self):
-                self.position = None
-
-            def yview(self):
-                return (0.25, 0.5)
-
-            def yview_moveto(self, position):
-                self.position = position
-
-        app.root = types.SimpleNamespace(winfo_children=lambda: [])
-        app.proc = object()
-        app.auto_next_deadline = 123
-        app.auto_next_after_id = "timer-id"
-        app.log_history = ["existing log"]
-        app.status_var = Variable("Waiting for next batch")
-        app.progress_var = Variable(65)
-        app.progress_label = Variable("Progress: 6/10 images (65%)")
-        app.auto_next_countdown_var = Variable("Next batch in 00:30")
-        app.main_canvas = Canvas()
-
-        def rebuild_widgets():
-            app.status_var = Variable("")
-            app.progress_var = Variable(0)
-            app.progress_label = Variable("")
-            app.auto_next_countdown_var = Variable("")
-            app.auto_next_frame = Frame()
-            app.main_canvas = Canvas()
-
-        with patch.object(app, "cancel_auto_next", side_effect=AssertionError("style change cancelled timer")), \
-             patch.object(app, "save_settings"), \
-             patch.object(app, "setup_style"), \
-             patch.object(app, "build_ui", side_effect=rebuild_widgets):
-            app.set_style("golden_gate")
-
-        self.assertEqual(app.style_code(), "golden_gate")
-        self.assertIsNotNone(app.proc)
-        self.assertEqual(app.auto_next_deadline, 123)
-        self.assertEqual(app.auto_next_after_id, "timer-id")
-        self.assertEqual(app.status_var.get(), "Waiting for next batch")
-        self.assertEqual(app.progress_var.get(), 65)
-        self.assertEqual(app.progress_label.get(), "Progress: 6/10 images (65%)")
-        self.assertEqual(app.auto_next_countdown_var.get(), "Next batch in 00:30")
-        self.assertTrue(app.auto_next_frame.visible)
-        self.assertEqual(app.main_canvas.position, 0.25)
 
 
 class ScrollableLayoutTests(unittest.TestCase):

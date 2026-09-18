@@ -338,6 +338,68 @@ class WebApiTests(unittest.TestCase):
         self.assertIn("window.pywebview", js)
         self.assertIn("batchTranslatorReceive", js)
 
+    def test_window_controls_contracts(self):
+        # Window not attached
+        self.api.window = None
+        self.assertFalse(self.api.close_window()["ok"])
+        self.assertFalse(self.api.minimize_window()["ok"])
+        self.assertFalse(self.api.toggle_maximize_window()["ok"])
+
+        # Window attached with destroy method
+        destroy_called = False
+        minimize_called = False
+        maximize_called = False
+        restore_called = False
+
+        def fake_destroy():
+            nonlocal destroy_called
+            destroy_called = True
+
+        def fake_minimize():
+            nonlocal minimize_called
+            minimize_called = True
+
+        def fake_maximize():
+            nonlocal maximize_called
+            maximize_called = True
+
+        def fake_restore():
+            nonlocal restore_called
+            restore_called = True
+
+        fake_win = types.SimpleNamespace(
+            destroy=fake_destroy,
+            minimize=fake_minimize,
+            maximize=fake_maximize,
+            restore=fake_restore,
+            x=10, y=20, width=800, height=600,
+            native=types.SimpleNamespace(WindowState="Normal"),
+        )
+        self.api._attach_window(fake_win)
+
+        # Minimize
+        min_res = self.api.minimize_window()
+        self.assertTrue(min_res["ok"])
+        self.assertTrue(minimize_called)
+
+        # Toggle maximize -> maximize
+        max_res = self.api.toggle_maximize_window()
+        self.assertTrue(max_res["ok"])
+        self.assertTrue(maximize_called)
+        self.assertTrue(max_res["data"]["maximized"])
+
+        # Toggle maximize -> restore
+        fake_win.native.WindowState = "Maximized"
+        rest_res = self.api.toggle_maximize_window()
+        self.assertTrue(rest_res["ok"])
+        self.assertTrue(restore_called)
+        self.assertFalse(rest_res["data"]["maximized"])
+
+        # Close
+        close_res = self.api.close_window()
+        self.assertTrue(close_res["ok"])
+        self.assertTrue(destroy_called)
+
 
 if __name__ == "__main__":
     unittest.main()

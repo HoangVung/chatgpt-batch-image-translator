@@ -124,12 +124,16 @@ async function save(showSavedStatus = false) {
   const data = await api("save_settings", formPayload());
   state.settings = data.settings;
   renderSettings();
-  if (showSavedStatus) $("#status .status-copy").textContent = t("saved");
+  if (showSavedStatus) {
+    const copy = $("#status .status-copy");
+    if (copy) copy.textContent = t("saved");
+  }
 }
 
 function renderStatus() {
   const status = state.controller.status || {key: "ready", params: {}};
-  $("#status .status-copy").textContent = t(status.key, status.params);
+  const copy = $("#status .status-copy");
+  if (copy) copy.textContent = t(status.key, status.params);
 }
 
 function renderController() {
@@ -157,7 +161,8 @@ function renderController() {
   const runCopy = $("#run-indicator span:last-child");
   runCopy.textContent = running ? t("status_running") : t("ready");
   $("#run-indicator").classList.toggle("active", running);
-  $("#status").dataset.state = manual ? "warning" : running ? "running" : "idle";
+  const statusEl = $("#status");
+  if (statusEl) statusEl.dataset.state = manual ? "warning" : running ? "running" : "idle";
   renderStatus();
 }
 
@@ -360,39 +365,66 @@ function applyChromeEnvironment() {
 applyChromeEnvironment();
 window.addEventListener("pywebviewready", applyChromeEnvironment, {once: true});
 
-/* Safe call: returns a promise even when the bridge isn't reachable. */
-function callWindowBridge(method) {
-  const fn = window.pywebview?.api?.[method];
-  if (typeof fn !== "function") return Promise.resolve({ok: false, error: "bridge unavailable"});
-  try {
-    return Promise.resolve(fn());
-  } catch (error) {
-    return Promise.resolve({ok: false, error: String(error?.message || error)});
+/* Prevent pywebview easy_drag from hijacking clicks on window controls and interactive elements */
+document.addEventListener("mousedown", (event) => {
+  const target = event.target instanceof Element ? event.target : null;
+  if (!target) return;
+  if (target.closest('[data-window-drag="no"], button, input, select, textarea, label')) {
+    event.stopPropagation();
+  }
+}, true);
+
+function updateMaximizeState(isMax) {
+  document.body.classList.toggle("is-maximized", Boolean(isMax));
+  const zoom = document.querySelector('[data-action="toggle-maximize-window"]');
+  if (zoom) {
+    zoom.setAttribute("aria-label", isMax ? "Restore window" : "Maximize window");
+    zoom.title = isMax ? "Khôi phục" : "Phóng to";
   }
 }
 
-const WINDOW_ACTIONS = {
-  "minimize-window": () => callWindowBridge("minimize_window"),
-  "toggle-maximize-window": () => callWindowBridge("toggle_maximize_window"),
-  "close-window": () => callWindowBridge("close_window"),
-};
+async function handleWindowAction(action) {
+  try {
+    if (action === "minimize-window") {
+      await api("minimize_window");
+    } else if (action === "toggle-maximize-window") {
+      const res = await api("toggle_maximize_window");
+      if (res && typeof res.maximized === "boolean") {
+        updateMaximizeState(res.maximized);
+      }
+    } else if (action === "close-window") {
+      await api("close_window");
+    }
+  } catch (error) {
+    console.error(`Window action "${action}" failed:`, error);
+  }
+}
 
 document.addEventListener("click", (event) => {
   const target = event.target instanceof Element
     ? event.target.closest("[data-action]")
     : null;
   if (!target) return;
-  const handler = WINDOW_ACTIONS[target.dataset.action];
-  if (!handler) return;
-  handler();
-  /* Close swallows the click on macOS maximize double-click area; nothing
-     else to do. */
+  event.preventDefault();
+  event.stopPropagation();
+  handleWindowAction(target.dataset.action);
 });
 
-/* When pywebview finishes moving the window to a new state, refresh the
-   zoom glyph (light refresh of hover-state classes; pure visual nicety). */
+/* Double-clicking the titlebar toggles maximize/restore (native OS behavior) */
+document.addEventListener("dblclick", (event) => {
+  const target = event.target instanceof Element ? event.target : null;
+  if (!target) return;
+  if (target.closest('[data-window-drag="no"], button, input, select, textarea')) return;
+  if (target.closest(".titlebar")) {
+    handleWindowAction("toggle-maximize-window");
+  }
+});
+
+/* When pywebview is ready, initialize window control attributes. */
 window.addEventListener("pywebviewready", () => {
   const zoom = document.querySelector('[data-action="toggle-maximize-window"]');
   if (!zoom) return;
-  zoom.setAttribute("aria-label", "Zoom window");
+  zoom.setAttribute("aria-label", "Maximize window");
+  zoom.title = "Phóng to";
 });
+

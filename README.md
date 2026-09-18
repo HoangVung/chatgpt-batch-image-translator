@@ -19,8 +19,7 @@
 - Chạy lại ảnh lỗi hoặc chạy lại một ảnh được chỉ định (Force Rerun với cơ chế dừng an toàn nếu tên mơ hồ).
 - Quản lý vòng đời job qua exit code chuẩn và tự động lập lịch chạy batch tiếp theo (xem [JOB_COMPLETION.md](JOB_COMPLETION.md)).
 - Tự động mở trình duyệt bằng Playwright Chromium với profile riêng cho từng dịch vụ.
-- Hỗ trợ theme Sáng, Tối và Hệ thống.
-- Hỗ trợ phong cách giao diện Gốc hoặc macOS 27 Golden Gate.
+- Giao diện Liquid Glass riêng với theme Sáng, Tối và Hệ thống; giao diện Tk chỉ là phương án dự phòng tương thích.
 - Xuất log (`Xuất log`) ra file và sao chép log (`Copy log`) nhanh vào clipboard.
 - Bộ tiện ích đi kèm: xuất danh sách lỗi (`export_failed.py`), gom ảnh lỗi chạy lại (`retry_failed.py`) sử dụng module chung `progress_utils.py`.
 - Bộ kiểm thử tự động tích hợp trong thư mục `tests/`.
@@ -211,7 +210,7 @@ Desktop app for batch-processing book/comic images with ChatGPT or Google Gemini
 - Retry failed images or force rerun a selected image with safe stopping on ambiguous names.
 - Job lifecycle management with standard exit codes and automatic batch chaining (see [JOB_COMPLETION.md](JOB_COMPLETION.md)).
 - Automatically opens ChatGPT or Gemini through Playwright Chromium with dedicated browser profiles.
-- Supports Light, Dark, and System themes; includes Classic and macOS 27 Golden Gate visual styles.
+- Dedicated Liquid Glass interface with Light, Dark, and System themes; the Tk interface remains only as a compatibility fallback.
 - Export log to file (`Export log`) and copy log to clipboard (`Copy log`).
 - Helper utilities included: export failures (`export_failed.py`), copy failed images for retry (`retry_failed.py`) backed by shared `progress_utils.py`.
 - Automated test suite included in `tests/`.

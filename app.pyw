@@ -117,7 +117,6 @@ DEFAULT_SETTINGS = {
     "auto_next_enabled": True,
     "auto_next_delay_minutes": "2",
     "theme": "system",
-    "ui_style": "classic",
     "language": "vi",
     "service": "chatgpt"
 }
@@ -149,22 +148,10 @@ THEME_OPTIONS = {
     }
 }
 
-STYLE_OPTIONS = {
-    "vi": {
-        "classic": "Gốc",
-        "golden_gate": "macOS 27 Golden Gate"
-    },
-    "en": {
-        "classic": "Classic",
-        "golden_gate": "macOS 27 Golden Gate"
-    }
-}
-
 TEXT = {
     "vi": {
         "language": "Ngôn ngữ",
         "theme": "Giao diện",
-        "style": "Phong cách",
         "sidebar_title": "Dịch sách tự động",
         "sidebar_desc": "Upload ảnh, dịch nội dung, tạo ảnh Việt hóa và quản lý batch.",
         "status_label": "Trạng thái",
@@ -275,7 +262,6 @@ TEXT = {
     "en": {
         "language": "Language",
         "theme": "Theme",
-        "style": "Style",
         "sidebar_title": "Automatic book translation",
         "sidebar_desc": "Upload images, translate content, generate localized images, and manage batches.",
         "status_label": "Status",
@@ -956,13 +942,6 @@ class ChatGPTBatchApp:
     def current_theme_label(self):
         return THEME_OPTIONS[self.language_code()][self.theme_code()]
 
-    def style_code(self):
-        code = self.settings.get("ui_style", DEFAULT_SETTINGS["ui_style"])
-        return code if code in STYLE_OPTIONS["en"] else DEFAULT_SETTINGS["ui_style"]
-
-    def current_style_label(self):
-        return STYLE_OPTIONS[self.language_code()][self.style_code()]
-
     def set_language(self, code):
         if code == self.language_code():
             return
@@ -985,72 +964,6 @@ class ChatGPTBatchApp:
         for child in self.root.winfo_children():
             child.destroy()
         self.build_ui()
-
-    def set_style(self, code):
-        """Apply a visual style without interrupting an active workflow.
-
-        Theme changes keep their existing behavior. Style changes only replace
-        presentation widgets and deliberately leave the worker, timers, log
-        history, and workflow state untouched.
-        """
-        if code == self.style_code():
-            return
-
-        # Keep transient presentation state while replacing the widget tree.
-        # The worker and auto-next timer remain owned by this app instance.
-        status_value = None
-        progress_value = None
-        progress_label_value = None
-        countdown_value = None
-        scroll_position = None
-        try:
-            status_value = self.status_var.get()
-        except (AttributeError, tk.TclError):
-            pass
-        try:
-            progress_value = self.progress_var.get()
-        except (AttributeError, tk.TclError):
-            pass
-        try:
-            progress_label_value = self.progress_label.get()
-        except (AttributeError, tk.TclError):
-            pass
-        try:
-            countdown_value = self.auto_next_countdown_var.get()
-        except (AttributeError, tk.TclError):
-            pass
-        try:
-            scroll_position = self.main_canvas.yview()
-        except (AttributeError, tk.TclError):
-            pass
-
-        self.settings["ui_style"] = code
-        self.save_settings()
-        self.setup_style()
-        for child in self.root.winfo_children():
-            child.destroy()
-        self.build_ui()
-
-        if status_value is not None:
-            self.status_var.set(status_value)
-        if progress_value is not None:
-            self.progress_var.set(progress_value)
-        if progress_label_value is not None:
-            self.progress_label.set(progress_label_value)
-        if self.auto_next_deadline is not None:
-            self.set_auto_next_controls_visible(True)
-            try:
-                self.auto_next_countdown_var.set(countdown_value or status_value or "")
-            except (AttributeError, tk.TclError):
-                pass
-        if scroll_position:
-            try:
-                self.main_canvas.yview_moveto(scroll_position[0])
-                schedule_layout = getattr(self, "schedule_main_layout", None)
-                if schedule_layout is not None:
-                    schedule_layout(restore_position=scroll_position[0])
-            except (AttributeError, tk.TclError):
-                pass
 
     def add_header_menu(self, parent, label, current_text, choices, command, width):
         c = self.colors
@@ -1090,66 +1003,6 @@ class ChatGPTBatchApp:
         return button
 
     def get_palette(self):
-        if self.style_code() == "golden_gate":
-            if self.effective_theme_code() == "dark":
-                return {
-                    "app_bg": "#1c1c1e",
-                    "chrome_bg": "#242426",
-                    "sidebar_bg": "#242426",
-                    "card_bg": "#2c2c2e",
-                    "input_bg": "#353539",
-                    "log_bg": "#202023",
-                    "text": "#f5f5f7",
-                    "muted": "#b8b8be",
-                    "field": "#e7e7eb",
-                    "border": "#48484d",
-                    "gray_btn": "#353539",
-                    "gray_btn_active": "#414147",
-                    "gray_btn_pressed": "#2c2c30",
-                    "scroll_track": "#202023",
-                    "scroll_thumb": "#85858b",
-                    "scroll_arrow": "#b8b8be",
-                    "selection": "#38587f",
-                    "accent": "#5e9cff",
-                    "accent_hover": "#73aaff",
-                    "accent_pressed": "#4b87e6",
-                    "accent_text": "#111a2a",
-                    "danger": "#ffb7b0",
-                    "danger_hover": "#49312f",
-                    "danger_pressed": "#573532",
-                    "disabled_bg": "#303034",
-                    "disabled_text": "#85858b"
-                }
-
-            return {
-                "app_bg": "#f3f4f7",
-                "chrome_bg": "#f8f9fc",
-                "sidebar_bg": "#f8f9fc",
-                "card_bg": "#ffffff",
-                "input_bg": "#f8f9fc",
-                "log_bg": "#f5f6f9",
-                "text": "#1d1d1f",
-                "muted": "#6e6e73",
-                "field": "#303038",
-                "border": "#d9dce3",
-                "gray_btn": "#f8f9fc",
-                "gray_btn_active": "#eceef4",
-                "gray_btn_pressed": "#e2e5ec",
-                "scroll_track": "#f5f6f9",
-                "scroll_thumb": "#8a8d96",
-                "scroll_arrow": "#6e6e73",
-                "selection": "#cfe1ff",
-                "accent": "#3478f6",
-                "accent_hover": "#4b88f7",
-                "accent_pressed": "#2865d4",
-                "accent_text": "#ffffff",
-                "danger": "#b42318",
-                "danger_hover": "#fce9e7",
-                "danger_pressed": "#f8d9d5",
-                "disabled_bg": "#eceef2",
-                "disabled_text": "#8c8f97"
-            }
-
         if self.effective_theme_code() == "dark":
             return {
                 "app_bg": "#202020",
@@ -1283,7 +1136,6 @@ class ChatGPTBatchApp:
             "auto_next_enabled": bool(auto_next_var.get()) if auto_next_var else False,
             "auto_next_delay_minutes": auto_next_delay_var.get() if auto_next_delay_var else "2",
             "theme": self.theme_code(),
-            "ui_style": self.style_code(),
             "language": self.language_code(),
             "service": service,
         }
@@ -1315,14 +1167,6 @@ class ChatGPTBatchApp:
             self.set_theme,
             16
         )
-        style_button = self.add_header_menu(
-            header_controls,
-            self.t("style"),
-            self.current_style_label(),
-            list(STYLE_OPTIONS[self.language_code()].items()),
-            self.set_style,
-            22
-        )
         language_button = self.add_header_menu(
             header_controls,
             self.t("language"),
@@ -1332,7 +1176,7 @@ class ChatGPTBatchApp:
             12
         )
 
-        header_boxes = (theme_button.master, style_button.master, language_button.master)
+        header_boxes = (theme_button.master, language_button.master)
 
         def layout_header(event):
             stacked = event.width < 980
@@ -1340,11 +1184,9 @@ class ChatGPTBatchApp:
                 box.pack_forget()
             if stacked:
                 language_button.master.pack(side="top", anchor="e", padx=(0, 0), pady=(0, 2))
-                style_button.master.pack(side="top", anchor="e", padx=(0, 0), pady=(0, 2))
                 theme_button.master.pack(side="top", anchor="e", padx=(0, 0))
             else:
                 theme_button.master.pack(side="right", padx=(12, 0))
-                style_button.master.pack(side="right", padx=(12, 0))
                 language_button.master.pack(side="right", padx=(12, 0))
 
         chrome.bind("<Configure>", layout_header)
