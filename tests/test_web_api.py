@@ -234,6 +234,13 @@ class WebApiTests(unittest.TestCase):
         self.assertIsNone(original[1]["payload"]["value"])
         json.dumps(original)
 
+    def test_automatic_retry_request_launches_retry_worker(self):
+        self.api.controller.state.auto_next_active = True
+        self.api.controller.state.auto_next_mode = "retry"
+        response = self.api.run_auto_next_now()
+        self.assertTrue(response["ok"], response)
+        self.assertEqual(self.factory.calls[-1][1]["env"]["RUN_MODE"], "retry")
+
     def test_runtime_config_supports_chatgpt_gemini_and_account_refresh(self):
         self.api.settings.update({
             "chatgpt_accounts": [

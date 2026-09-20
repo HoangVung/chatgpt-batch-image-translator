@@ -548,7 +548,7 @@ def get_next_batch(images):
     if RUN_MODE == "retry":
         for img in images:
             st = latest.get(img.name, {}).get("status", "")
-            if st in FAILED_STATUSES:
+            if st in FAILED_STATUSES and not output_file_exists(img):
                 pending.append(img)
         return pending[:BATCH_SIZE]
 

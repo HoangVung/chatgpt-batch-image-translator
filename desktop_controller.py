@@ -50,6 +50,8 @@ class DesktopState:
     auto_next_active: bool = False
     auto_next_deadline: float | None = None
     auto_next_token: int = 0
+    auto_next_mode: str = "main"
+    retry_stalled_rounds: int = 0
 
 
 @dataclass(frozen=True)
@@ -108,6 +110,7 @@ class DesktopController:
 
         if not auto_started:
             self.cancel_auto_next()
+            self.state.retry_stalled_rounds = 0
 
         process = self._popen_factory(
             launch.command,
@@ -288,7 +291,7 @@ class DesktopController:
         self._emit("auto_next_cancelled", active=active, announce=announce)
         return active
 
-    def schedule_auto_next(self) -> bool:
+    def schedule_auto_next(self, mode: str = "main") -> bool:
         delay_seconds = self.state.auto_next_delay_seconds
         if delay_seconds is None or delay_seconds < 1:
             self._emit("invalid_auto_next_delay")
@@ -298,12 +301,14 @@ class DesktopController:
         self.state.auto_next_token += 1
         token = self.state.auto_next_token
         self.state.auto_next_active = True
+        self.state.auto_next_mode = mode
         self.state.auto_next_deadline = self._monotonic() + delay_seconds
         result = self.state.current_batch_result or {}
         self._emit(
             "auto_next_scheduled",
             count=result.get("requested_batch_size", "?"),
             seconds=delay_seconds,
+            mode=mode,
         )
         self.update_auto_next_countdown(token)
         return True
@@ -327,15 +332,47 @@ class DesktopController:
         self.state.auto_next_deadline = None
         if self.state.auto_next_enabled and not self.is_running():
             self._emit("auto_next_running")
-            self._emit("auto_next_start_requested")
+            self._emit("auto_next_start_requested", mode=self.state.auto_next_mode)
 
     def run_auto_next_now(self) -> bool:
         if not self.state.auto_next_active:
             return False
         self.cancel_auto_next()
         self._emit("auto_next_running")
-        self._emit("auto_next_start_requested")
+        self._emit("auto_next_start_requested", mode=self.state.auto_next_mode)
         return True
+
+    def _schedule_recovery(self, exit_code: int) -> bool:
+        """Recover failures before resuming pending work, with bounded stalls."""
+        state = self.state
+        result = state.current_batch_result or {}
+        job = result.get("job", {})
+        if (not state.auto_next_enabled or state.current_run_mode not in ("main", "retry")
+                or state.current_run_intervened or exit_code not in (0, 2)
+                or result.get("exit_code") != exit_code
+                or job.get("state") not in ("pending", "needs_retry")):
+            return False
+        try:
+            failed = int(job["failed"])
+            pending = int(job["pending"])
+            selected = int(result["selected_count"])
+            succeeded = int(result["success_count"])
+        except (KeyError, TypeError, ValueError):
+            return False
+        if min(failed, pending, selected, succeeded) < 0:
+            return False
+        if state.current_run_mode == "retry":
+            state.retry_stalled_rounds = 0 if succeeded else state.retry_stalled_rounds + 1
+        else:
+            state.retry_stalled_rounds = 0
+        if failed and state.retry_stalled_rounds < 3:
+            self._emit("auto_recovery", reason="auto_retry_scheduled")
+            return self.schedule_auto_next("retry")
+        if failed:
+            self._emit("auto_recovery", reason="auto_retry_exhausted")
+        if pending and (selected or state.current_run_mode == "retry"):
+            return self.schedule_auto_next("main")
+        return False
 
     def get_auto_next_skip_reason(self, exit_code: int) -> tuple[str, dict[str, Any]] | None:
         state = self.state
@@ -375,6 +412,8 @@ class DesktopController:
     def handle_process_done(self, exit_code: int) -> None:
         self.process = None
         self.state.running = False
+        if self.state.manual_action_required:
+            self.state.current_run_intervened = True
         self.state.manual_action_required = False
         self._emit("process_completed", exit_code=exit_code)
 
@@ -390,6 +429,8 @@ class DesktopController:
         if exit_code == 4 and job.get("state") == "waiting_quota":
             self.cancel_auto_next()
             self._emit("process_outcome", outcome="waiting_quota", exit_code=exit_code, job=job)
+            return
+        if self._schedule_recovery(exit_code):
             return
         if exit_code == 2 and job.get("state") == "needs_retry":
             self.cancel_auto_next()

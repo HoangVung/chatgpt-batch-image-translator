@@ -185,7 +185,9 @@ class WebApi:
             self._set_status("auto_cancelled")
         elif kind == "auto_next_start_requested":
             if not self._closed:
-                self._start("main", auto_started=True)
+                self._start(data.get("mode", "main"), auto_started=True)
+        elif kind == "auto_recovery":
+            self._append_log("\n" + self._text(data["reason"]) + "\n")
         elif kind == "auto_next_recovered":
             self._append_log("\n" + self._text("auto_next_recovered", code=data["code"]) + "\n")
         elif kind == "auto_next_skipped":
