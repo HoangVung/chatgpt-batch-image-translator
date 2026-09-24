@@ -12,6 +12,7 @@ import time
 from collections import deque
 from dataclasses import dataclass
 from typing import Any, Callable
+from functools import wraps
 
 
 BATCH_RESULT_PREFIX = "__BATCH_RESULT__="
@@ -73,6 +74,7 @@ class DesktopController:
         process_tree_terminator: Callable[[Any], None] | None = None,
     ) -> None:
         self.scheduler = scheduler
+        self._lock = threading.RLock()
         self.state = DesktopState()
         self.process: Any | None = None
         self.log_history: list[str] = []
@@ -148,12 +150,12 @@ class DesktopController:
     def read_process_output(self, process: Any) -> None:
         try:
             for line in process.stdout:
-                self._reader_queue.put(("line", line))
+                self._reader_queue.put(("line", line, process))
         except Exception as exc:
-            self._reader_queue.put(("reader_error", str(exc)))
+            self._reader_queue.put(("reader_error", str(exc), process))
         finally:
             code = process.wait()
-            self._reader_queue.put(("line", f"\n=== KẾT THÚC, EXIT CODE: {code} ===\n"))
+            self._reader_queue.put(("line", f"\n=== KẾT THÚC, EXIT CODE: {code} ===\n", process))
             self._reader_queue.put(("done", process, code))
 
     def drain_events(self) -> list[ControllerEvent]:
@@ -164,6 +166,8 @@ class DesktopController:
                 break
 
             kind = item[0]
+            if kind in {"line", "reader_error"} and len(item) > 2 and item[2] is not self.process:
+                continue
             if kind == "line":
                 self.handle_worker_output(item[1])
             elif kind == "reader_error":
@@ -462,3 +466,22 @@ class DesktopController:
             )
         else:
             process.terminate()
+
+
+def _serialized(method):
+    @wraps(method)
+    def call(self, *args, **kwargs):
+        with self._lock:
+            return method(self, *args, **kwargs)
+    return call
+
+
+# Timer callbacks, UI commands and stdout draining all mutate the same state.
+# The reader itself only writes its queue and must never hold this lock while
+# waiting for a worker to finish.
+for _name in ("start", "stop", "shutdown", "send_continue", "drain_events",
+              "configure_auto_next", "mark_run_configuration_changed",
+              "cancel_auto_next", "schedule_auto_next", "update_auto_next_countdown",
+              "run_auto_next_now", "handle_worker_output", "handle_process_done",
+              "append_log", "clear_log"):
+    setattr(DesktopController, _name, _serialized(getattr(DesktopController, _name)))

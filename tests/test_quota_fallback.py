@@ -13,8 +13,11 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 playwright_module = types.ModuleType("playwright")
 playwright_sync_module = types.ModuleType("playwright.sync_api")
 playwright_sync_module.sync_playwright = lambda: None
-sys.modules.setdefault("playwright", playwright_module)
-sys.modules.setdefault("playwright.sync_api", playwright_sync_module)
+try:
+    import playwright.sync_api
+except ImportError:
+    sys.modules.setdefault("playwright", playwright_module)
+    sys.modules.setdefault("playwright.sync_api", playwright_sync_module)
 
 worker_spec = importlib.util.spec_from_file_location(
     "worker_quota_under_test", PROJECT_ROOT / "run_chatgpt_batch.py"

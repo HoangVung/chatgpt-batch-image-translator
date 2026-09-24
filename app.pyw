@@ -390,9 +390,9 @@ def enable_windows_dpi_awareness():
 
 
 def run_packaged_worker():
-    import run_chatgpt_batch
+    from desktop.webview_app import run_packaged_worker as run_worker
 
-    sys.exit(run_chatgpt_batch.main())
+    sys.exit(run_worker())
 
 
 def copy_windows_clipboard_text(text):

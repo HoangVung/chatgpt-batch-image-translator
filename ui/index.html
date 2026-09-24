@@ -54,8 +54,7 @@
 
         <div class="sidebar-context" aria-live="polite">
           <p class="sidebar-label" data-i18n="service">Service</p>
-          <div class="context-pill"><span class="context-dot"></span><strong id="service-context">ChatGPT</strong></div>
-          <p id="account-context" class="context-caption">ChatGPT 1</p>
+          <div id="service-contexts"></div>
         </div>
 
         <div class="sidebar-footer">
@@ -68,13 +67,17 @@
       </aside>
 
       <main id="workspace-top" class="workspace">
-        <header class="topbar">
-          <div><p class="eyebrow">Production workspace</p><h1 data-i18n="app_title">Batch Image Translator</h1><p class="headline-caption">Local workflow · Shared controller · Native window</p></div>
-        </header>
+        <div class="workspace-header">
+          <header class="topbar">
+            <div><p class="eyebrow">Workspace</p><h1 data-i18n="app_title">Batch Image Translator</h1><p class="headline-caption" data-i18n="workflow_hint">Use a separate output folder and profile group for each book.</p></div>
+          </header>
+
+          <div id="workflow-tabs" class="workflow-tabs" role="tablist" aria-label="Hai phiên dịch sách"></div>
+        </div>
 
         <div id="notice" class="notice hidden" role="alert"><span class="notice-icon" aria-hidden="true">!</span><span class="notice-copy"></span></div>
 
-        <div class="content-grid">
+        <div id="workflow-panel" class="content-grid" role="tabpanel">
           <section id="configuration-card" class="glass card configuration-card">
             <div class="section-title"><div><p class="section-kicker">Workspace</p><h2 data-i18n="configuration">Configuration</h2></div><button id="save" class="button primary compact" type="button" data-i18n="save">Save settings</button></div>
 
@@ -93,6 +96,7 @@
             <div class="paths">
               <label class="field path-field"><span data-i18n="source_folder">Source image folder</span><span class="input-action"><input id="source-folder" /><button type="button" data-folder="source" data-i18n="browse">Browse</button></span></label>
               <label class="field path-field"><span data-i18n="output_folder">VN output folder</span><span class="input-action"><input id="output-folder" /><button type="button" data-folder="output" data-i18n="browse">Browse</button></span></label>
+              <button id="confirm-output" type="button" class="confirm-output" data-i18n="confirm_existing_output">Confirm existing output</button>
               <label class="field path-field"><span data-i18n="profile">Browser profile</span><span class="input-action"><input id="profile-folder" /><button type="button" data-folder="profile" data-i18n="browse">Browse</button></span></label>
             </div>
           </section>

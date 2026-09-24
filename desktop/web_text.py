@@ -2,6 +2,16 @@
 
 WEB_TEXT = {
     "vi": {
+        "book_tab": "Sách {number}",
+        "workflow_tabs": "Hai phiên dịch sách",
+        "workflow_hint": "Mỗi sách dùng thư mục kết quả và nhóm profile riêng. Chuyển tab không dừng dịch.",
+        "confirm_existing_output": "Xác nhận kết quả cũ",
+        "confirm_output_question": "Bạn đã kiểm tra thư mục kết quả này thuộc đúng sách đang chọn? Xác nhận sẽ gắn thư mục với nguồn hiện tại, giữ nguyên các ảnh và tiến trình đã có.",
+        "output_confirmed": "Đã xác nhận thư mục kết quả thuộc sách này.",
+        "close_active_workflows": "Còn phiên đang chạy hoặc chờ tự chạy. Đóng app sẽ dừng cả hai phiên. Tiếp tục đóng?",
+        "tab_waiting": "Chờ tự chạy",
+        "tab_folder_progress": "Cả thư mục: {done}/{total} ảnh",
+        "tab_attention": "Cần kiểm tra",
         "app_title": "Dịch ảnh hàng loạt",
         "dashboard": "Bảng điều khiển",
         "configuration": "Cấu hình",
@@ -75,6 +85,16 @@ WEB_TEXT = {
         "error": "Lỗi",
     },
     "en": {
+        "book_tab": "Book {number}",
+        "workflow_tabs": "Two book workflows",
+        "workflow_hint": "Use a separate output folder and profile group for each book. Switching tabs keeps both running.",
+        "confirm_existing_output": "Confirm existing output",
+        "confirm_output_question": "Have you checked that this output folder belongs to the selected book? Confirming binds it to the current source and preserves existing images and progress.",
+        "output_confirmed": "Output folder confirmed for this book.",
+        "close_active_workflows": "Workflows are running or waiting for an automatic run. Closing the app stops both. Close anyway?",
+        "tab_waiting": "Auto-run pending",
+        "tab_folder_progress": "Whole folder: {done}/{total} images",
+        "tab_attention": "Needs attention",
         "app_title": "Batch Image Translator",
         "dashboard": "Dashboard",
         "configuration": "Configuration",

@@ -124,7 +124,7 @@ class WebApiTests(unittest.TestCase):
             "get_platform_capabilities", "list_accounts", "login_account", "minimize_window",
             "open_output_folder", "remove_account", "rename_account", "run_auto_next_now",
             "save_settings", "select_account", "set_language", "set_theme", "start_batch",
-            "stop_process", "toggle_maximize_window",
+            "stop_process", "toggle_maximize_window", "move_window",
         })
 
     def test_pywebview_bridge_contains_no_public_runtime_state(self):
@@ -136,7 +136,8 @@ class WebApiTests(unittest.TestCase):
             "get_platform_capabilities", "list_accounts", "login_account", "minimize_window",
             "open_output_folder", "remove_account", "rename_account", "run_auto_next_now",
             "save_settings", "select_account", "set_language", "set_theme", "start_batch",
-            "stop_process", "toggle_maximize_window",
+            "stop_process", "toggle_maximize_window", "move_window",
+            "confirm_existing_output",
         })
         self.assertTrue(all(callable(getattr(bridge, name)) for name in public))
 
@@ -233,6 +234,29 @@ class WebApiTests(unittest.TestCase):
         self.assertLess(original[0]["sequence"], original[1]["sequence"])
         self.assertIsNone(original[1]["payload"]["value"])
         json.dumps(original)
+
+    def test_folder_counts_are_in_snapshot_and_refresh_after_save_and_progress(self):
+        def wait_for_scan():
+            thread = self.api._folder_progress_thread
+            if thread:
+                thread.join(2)
+                self.assertFalse(thread.is_alive())
+
+        with patch.object(self.api._folder_progress, "read", return_value={"done": 13, "total": 100}) as read:
+            self.api.get_initial_state()
+            wait_for_scan()
+            self.assertEqual(self.api.get_initial_state()["data"]["controller"]["folder_progress"],
+                             {"done": 13, "total": 100})
+            self.assertTrue(self.api.save_settings({})["ok"])
+            wait_for_scan()
+            self.assertEqual(self.api.sent_events[-1]["type"], "folder_progress_changed")
+            for kind in ("progress_changed", "process_completed"):
+                self.api.controller._events.append(ControllerEvent(kind, {"done": 3, "total": 10}))
+                self.api._dispatch_once()
+                wait_for_scan()
+                self.assertEqual(self.api.sent_events[-1]["payload"], {"done": 13, "total": 100})
+                self.assertEqual(self.api.sent_events[-1]["session_id"], "book-1")
+            read.assert_called_with({key: self.api.settings[key] for key in ("image_folder", "download_folder")})
 
     def test_automatic_retry_request_launches_retry_worker(self):
         self.api.controller.state.auto_next_active = True
@@ -344,6 +368,21 @@ class WebApiTests(unittest.TestCase):
             self.assertNotIn(forbidden, combined)
         self.assertIn("window.pywebview", js)
         self.assertIn("batchTranslatorReceive", js)
+
+    def test_touch_window_move_validates_coordinates_and_preserves_maximized_window(self):
+        self.assertFalse(self.api.move_window(10, 20)["ok"])
+        positions = []
+        self.api._attach_window(types.SimpleNamespace(
+            move=lambda x, y: positions.append((x, y)),
+            native=types.SimpleNamespace(WindowState="Normal"),
+        ))
+        self.assertTrue(WebBridge(self.api).move_window(-200, 50)["ok"])
+        self.assertEqual(positions, [(-200, 50)])
+        for value in (None, True, "20", float("nan"), float("inf"), 1_000_001):
+            self.assertFalse(self.api.move_window(value, 0)["ok"])
+        self.api.window.native.WindowState = "Maximized"
+        self.assertFalse(self.api.move_window(10, 20)["data"]["moved"])
+        self.assertEqual(positions, [(-200, 50)])
 
     def test_window_controls_contracts(self):
         # Window not attached
