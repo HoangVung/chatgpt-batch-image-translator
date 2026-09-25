@@ -207,13 +207,15 @@ TEXT = {
         "batch_size": "Số ảnh mỗi lần",
         "auto_next": "Tự chạy batch tiếp theo",
         "auto_next_delay": "Chờ (phút)",
-        "auto_next_hint": "Chỉ tự chạy tiếp khi batch chính đủ ảnh và đều thành công.",
+        "auto_next_hint": "Tự chạy lại ảnh lỗi rồi tiếp tục batch kế tiếp.",
+        "auto_retry_scheduled": "Tự động chạy lại ảnh lỗi sau thời gian chờ.",
+        "auto_retry_exhausted": "3 lượt chạy lại không có tiến triển. Giữ danh sách lỗi và xử lý ảnh còn lại nếu có.",
         "invalid_auto_next_delay": "Thời gian chờ tự chạy phải là số dương.",
-        "auto_countdown": "Batch hoàn tất. Chạy batch tiếp theo sau {time}.",
+        "auto_countdown": "Lượt tự động tiếp theo sau {time}.",
         "auto_run_now": "Chạy ngay",
         "auto_cancel": "Hủy tự chạy",
         "auto_cancelled": "Đã hủy tự chạy batch tiếp theo.",
-        "auto_scheduled_log": "=== Batch đủ {count} ảnh thành công. Tự chạy batch tiếp theo sau {seconds} giây. ===",
+        "auto_scheduled_log": "=== Lượt tự động tiếp theo sau {seconds} giây. ===",
         "auto_running_log": "=== Đang tự chạy batch tiếp theo ===",
         "auto_skip_failed": "=== Không tự chạy: batch vừa xong có ảnh lỗi hoặc thiếu ảnh thành công. ===",
         "auto_skip_incomplete": "=== Không tự chạy: batch vừa xong chưa đủ {count} ảnh. ===",
@@ -317,13 +319,15 @@ TEXT = {
         "batch_size": "Images per batch",
         "auto_next": "Automatically run next batch",
         "auto_next_delay": "Wait (minutes)",
-        "auto_next_hint": "Continue only when a full main batch succeeds.",
+        "auto_next_hint": "Automatically retry failed images, then continue the next batch.",
+        "auto_retry_scheduled": "Automatically retrying failed images after the delay.",
+        "auto_retry_exhausted": "3 retries made no progress. Keeping failures and continuing pending images, if any.",
         "invalid_auto_next_delay": "The automatic-run delay must be a positive number.",
-        "auto_countdown": "Batch completed. The next batch starts in {time}.",
+        "auto_countdown": "Next automatic run in {time}.",
         "auto_run_now": "Run now",
         "auto_cancel": "Cancel auto-run",
         "auto_cancelled": "Automatic next batch cancelled.",
-        "auto_scheduled_log": "=== A full batch of {count} images succeeded. The next batch starts in {seconds} seconds. ===",
+        "auto_scheduled_log": "=== The next automatic run starts in {seconds} seconds. ===",
         "auto_running_log": "=== Automatically starting the next batch ===",
         "auto_skip_failed": "=== Not auto-running: the completed batch has failed or incomplete images. ===",
         "auto_skip_incomplete": "=== Not auto-running: the completed batch has fewer than {count} images. ===",
@@ -386,9 +390,9 @@ def enable_windows_dpi_awareness():
 
 
 def run_packaged_worker():
-    import run_chatgpt_batch
+    from desktop.webview_app import run_packaged_worker as run_worker
 
-    sys.exit(run_chatgpt_batch.main())
+    sys.exit(run_worker())
 
 
 def copy_windows_clipboard_text(text):
@@ -2218,7 +2222,9 @@ class ChatGPTBatchApp:
         elif event_type == "auto_next_start_requested":
             # Rebuild the launch environment from the current presentation
             # state so a worker-side account switch carries into the next run.
-            self.start("main", auto_started=True)
+            self.start(data.get("mode", "main"), auto_started=True)
+        elif event_type == "auto_recovery":
+            self.log("\n" + self.t(data["reason"]) + "\n")
         elif event_type == "auto_next_recovered":
             self.log("\n" + self.t("auto_recover_after_worker_exit", code=data["code"]) + "\n")
         elif event_type == "auto_next_skipped":

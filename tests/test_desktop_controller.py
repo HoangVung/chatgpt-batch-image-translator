@@ -319,6 +319,85 @@ class DesktopControllerTests(unittest.TestCase):
             with self.subTest(value=value), self.assertRaises(ValueError):
                 DesktopController.parse_auto_next_delay(value)
 
+    def finish_recovery_batch(self, controller, mode, failed, pending, succeeded=0):
+        controller.state.current_run_mode = mode
+        code = 2 if failed else 0
+        controller.state.current_batch_result = full_success_result(
+            selected_count=1, completed_count=1, success_count=succeeded,
+            failure_count=0 if succeeded else 1, exit_code=code,
+            next_pending_count=pending,
+            job={"state": "pending" if pending else "needs_retry" if failed else "complete",
+                 "failed": failed, "pending": pending},
+        )
+        controller.handle_process_done(code)
+        return controller.drain_events()
+
+    def test_failed_main_retries_then_resumes_main_then_completes(self):
+        controller = self.make_controller()
+        controller.configure_auto_next(True, 1)
+        self.finish_recovery_batch(controller, "main", 1, 10)
+        self.assertTrue(controller.run_auto_next_now())
+        requests = [e.data for e in controller.drain_events() if e.type == "auto_next_start_requested"]
+        self.assertEqual(requests, [{"mode": "retry"}])
+        controller.start("retry", self.launch("retry"), auto_started=True)
+        self.finish_recovery_batch(controller, "retry", 0, 10, succeeded=1)
+        self.assertTrue(controller.run_auto_next_now())
+        requests = [e.data for e in controller.drain_events() if e.type == "auto_next_start_requested"]
+        self.assertEqual(requests, [{"mode": "main"}])
+        events = self.finish_recovery_batch(controller, "main", 0, 0, succeeded=1)
+        self.assertFalse(controller.state.auto_next_active)
+        self.assertIn("complete", [e.data.get("outcome") for e in events])
+
+    def test_stalled_retries_continue_pending_or_report_final_failures(self):
+        for pending in (0, 20):
+            controller = self.make_controller()
+            controller.configure_auto_next(True, 1)
+            self.finish_recovery_batch(controller, "main", 2, pending)
+            for attempt in range(3):
+                controller.run_auto_next_now()
+                events = self.finish_recovery_batch(controller, "retry", 2, pending)
+                if attempt < 2:
+                    self.assertEqual(controller.state.auto_next_mode, "retry")
+                    self.assertTrue(controller.state.auto_next_active)
+            if pending:
+                self.assertTrue(controller.state.auto_next_active)
+                self.assertEqual(controller.state.auto_next_mode, "main")
+            else:
+                self.assertFalse(controller.state.auto_next_active)
+                self.assertIn("needs_retry", [e.data.get("outcome") for e in events])
+
+    def test_retry_progress_resets_stall_budget(self):
+        controller = self.make_controller()
+        controller.configure_auto_next(True, 1)
+        controller.state.retry_stalled_rounds = 2
+        self.finish_recovery_batch(controller, "retry", 12, 0, succeeded=1)
+        self.assertEqual(controller.state.retry_stalled_rounds, 0)
+        self.assertTrue(controller.state.auto_next_active)
+        self.assertEqual(controller.state.auto_next_mode, "retry")
+
+    def test_recovery_respects_disabled_and_manual_intervention(self):
+        for enabled, intervened in ((False, False), (True, True)):
+            controller = self.make_controller()
+            controller.configure_auto_next(enabled, 1)
+            controller.state.current_run_intervened = intervened
+            self.finish_recovery_batch(controller, "main", 1, 10)
+            self.assertFalse(controller.state.auto_next_active)
+
+    def test_recovery_countdown_emits_retry_and_cancel_invalidates_timer(self):
+        controller = self.make_controller()
+        controller.configure_auto_next(True, 1)
+        self.finish_recovery_batch(controller, "main", 1, 10)
+        callback = self.scheduler.calls[-1]["callback"]
+        controller.stop()
+        self.clock.now += 1
+        callback()
+        self.assertNotIn("auto_next_start_requested", event_types(controller))
+        self.finish_recovery_batch(controller, "main", 1, 10)
+        self.clock.now += 1
+        self.scheduler.calls[-1]["callback"]()
+        requests = [e.data for e in controller.drain_events() if e.type == "auto_next_start_requested"]
+        self.assertEqual(requests, [{"mode": "retry"}])
+
     def test_controller_source_has_no_gui_or_webview_dependency(self):
         source = (PROJECT_ROOT / "desktop_controller.py").read_text(encoding="utf-8")
         for forbidden in (

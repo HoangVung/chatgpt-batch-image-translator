@@ -79,6 +79,8 @@ class WebFrontendTests(unittest.TestCase):
           window.pywebview = {api: {
             get_initial_state: () => ok(initial),
             save_settings: (payload) => { bridgeCalls.push(['save_settings', payload]); Object.assign(initial.settings, payload); return ok({settings: initial.settings}); },
+            set_theme: (theme) => { initial.settings.theme = theme; return ok(); },
+            set_language: (language) => { initial.settings.language = language; return ok(); },
             start_batch: (mode) => { bridgeCalls.push(['start_batch', mode]); return ok({state: initial.controller}); },
             choose_folder: (kind) => ok({kind, path:'D:/picked', cancelled:false}),
             stop_process: () => ok(), continue_manual_intervention: () => ok(),

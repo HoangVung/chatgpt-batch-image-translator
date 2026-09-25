@@ -50,6 +50,9 @@ class FakeApi:
     def _shutdown(self):
         self.shutdown_calls += 1
 
+    def _confirm_close(self):
+        return True
+
 
 class LauncherTests(unittest.TestCase):
     def setUp(self):
@@ -67,6 +70,17 @@ class LauncherTests(unittest.TestCase):
     def test_worker_and_self_test_bypass_both_gui_shells(self):
         self.assertEqual(select_launch_mode(["app.pyw", "--worker"], "win32"), "worker")
         self.assertEqual(select_launch_mode(["app.pyw", "--self-test"], "win32"), "self-test")
+
+    def test_packaged_worker_reports_conflict_without_unhandled_exception(self):
+        from resource_guard import ResourceConflict
+
+        def conflict():
+            raise ResourceConflict("Folder conflict")
+
+        errors = io.StringIO()
+        with patch.dict(sys.modules, {"run_chatgpt_batch": SimpleNamespace(run_guarded=conflict)}), patch.object(sys, "stderr", errors):
+            self.assertEqual(webview_app.run_packaged_worker(), 1)
+        self.assertIn("Folder conflict", errors.getvalue())
 
     def test_webview_success_does_not_request_tk_fallback(self):
         calls = []
@@ -109,7 +123,7 @@ class LauncherTests(unittest.TestCase):
             start=lambda **kwargs: (_ for _ in ()).throw(OSError("WebView2 unavailable")),
         )
 
-        with patch.object(webview_app, "WebApi", FakeApi), patch.dict(sys.modules, {"webview": fake_webview}):
+        with patch.object(webview_app, "SessionManager", FakeApi), patch.dict(sys.modules, {"webview": fake_webview}):
             with self.assertRaisesRegex(webview_app.WebShellStartupError, "WebView2 unavailable"):
                 webview_app.run_webview()
 
@@ -126,7 +140,7 @@ class LauncherTests(unittest.TestCase):
 
         fake_webview = SimpleNamespace(create_window=lambda *args, **kwargs: window, start=fail_after_initialized)
 
-        with patch.object(webview_app, "WebApi", FakeApi), patch.dict(sys.modules, {"webview": fake_webview}):
+        with patch.object(webview_app, "SessionManager", FakeApi), patch.dict(sys.modules, {"webview": fake_webview}):
             with self.assertRaisesRegex(ValueError, "runtime failure"):
                 webview_app.run_webview()
 
@@ -149,7 +163,7 @@ class LauncherTests(unittest.TestCase):
         fake_webview = SimpleNamespace(create_window=create_window, start=start)
 
         with (
-            patch.object(webview_app, "WebApi", FakeApi),
+            patch.object(webview_app, "SessionManager", FakeApi),
             patch.object(webview_app, "set_windows_app_user_model_id") as set_identity,
             patch.dict(sys.modules, {"webview": fake_webview}),
         ):
@@ -170,7 +184,7 @@ class LauncherTests(unittest.TestCase):
         )
 
         with (
-            patch.object(webview_app, "WebApi", FakeApi),
+            patch.object(webview_app, "SessionManager", FakeApi),
             patch.object(webview_app, "set_windows_app_user_model_id"),
             patch.object(webview_app, "enable_windows_taskbar_minimize") as mock_enable,
             patch.dict(sys.modules, {"webview": fake_webview}),

@@ -65,11 +65,25 @@ def parse_bool(value):
 def load_config():
     cfg = DEFAULT_CONFIG.copy()
 
-    if SETTINGS_FILE.exists():
+    explicit_path = os.getenv("BATCH_TRANSLATOR_SETTINGS_FILE")
+    settings_path = Path(explicit_path) if explicit_path else SETTINGS_FILE
+    if explicit_path and not settings_path.is_absolute():
+        raise ValueError("Worker settings snapshot must be an absolute path")
+    if explicit_path or settings_path.exists():
         try:
-            with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
-                cfg.update(json.load(f))
+            with open(settings_path, "r", encoding="utf-8") as f:
+                saved = json.load(f)
+            if not isinstance(saved, dict):
+                raise ValueError("Worker settings snapshot must be an object")
+            if explicit_path:
+                required = {"image_folder", "download_folder", "profile_dir", "chatgpt_accounts",
+                            "active_chatgpt_account_id", "service", "batch_size"}
+                if not required.issubset(saved):
+                    raise ValueError("Worker settings snapshot is incomplete")
+            cfg.update(saved)
         except Exception:
+            if explicit_path:
+                raise
             pass
 
     cfg["image_folder"] = os.getenv("IMAGE_FOLDER", cfg["image_folder"])
@@ -170,7 +184,7 @@ SERVICE = CFG.get("service", "chatgpt")
 BATCH_RESULT_PREFIX = "__BATCH_RESULT__="
 ACCOUNT_EVENT_PREFIX = "__ACCOUNT_EVENT__="
 
-WAIT_AFTER_EACH_IMAGE = 10
+WAIT_AFTER_EACH_IMAGE = 5
 MAX_RETRY_IMAGE = 3
 MAX_RETRY_DICH = 3
 IMAGE_WAIT_TIMEOUT = 1800
@@ -548,7 +562,7 @@ def get_next_batch(images):
     if RUN_MODE == "retry":
         for img in images:
             st = latest.get(img.name, {}).get("status", "")
-            if st in FAILED_STATUSES:
+            if st in FAILED_STATUSES and not output_file_exists(img):
                 pending.append(img)
         return pending[:BATCH_SIZE]
 
@@ -2632,5 +2646,17 @@ def main():
     return final_code
 
 
+def run_guarded():
+    from resource_guard import ResourceLease, claim_output, validate_output_names, workflow_resources
+    settings = dict(CFG, image_folder=IMAGE_FOLDER, download_folder=DOWNLOAD_FOLDER,
+                    profile_dir=PROFILE_DIR, service=SERVICE)
+    # Protect the complete fallback pool, not just the first browser.
+    with ResourceLease(workflow_resources(settings, RUN_MODE)):
+        if RUN_MODE != "login":
+            validate_output_names(get_images(), get_output_name)
+            claim_output(settings)
+        return main()
+
+
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(run_guarded())

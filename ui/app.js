@@ -1,9 +1,12 @@
 "use strict";
 
-const state = {
+let state = {
   settings: {}, controller: {}, localization: {}, language: "vi", sequence: 0,
   initialized: false, launchPending: false,
 };
+const sessions = new Map();
+let multiSession = false;
+const preferenceVersions = {theme: 0, language: 0};
 const pendingMessages = [];
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector)];
@@ -14,6 +17,138 @@ async function api(method, ...args) {
   const response = await fn(...args);
   if (!response?.ok) throw new Error(response?.error || `${method} failed`);
   return response.data;
+}
+
+function sessionApi(target, method, ...args) {
+  return api(method, ...args, ...(multiSession ? [target.id] : []));
+}
+
+function captureDraft(target = state) {
+  if (target !== state || !state.initialized) return;
+  target.draft = formPayload();
+  target.accountNameDraft = $("#account-name").value;
+  target.logScroll = $("#log").scrollTop;
+  renderServiceContexts();
+}
+
+function renderServiceContexts() {
+  const container = $("#service-contexts");
+  sessions.forEach((target, id) => {
+    let row = document.getElementById(`service-${id}`);
+    if (!row) {
+      row = document.createElement("div");
+      row.id = `service-${id}`;
+      row.className = "book-service-context";
+      const label = document.createElement("strong");
+      label.className = "context-book";
+      const pill = document.createElement("div");
+      pill.className = "context-pill";
+      const dot = document.createElement("span");
+      dot.className = "context-dot";
+      dot.setAttribute("aria-hidden", "true");
+      const service = document.createElement("strong");
+      service.className = "context-service";
+      const account = document.createElement("p");
+      account.className = "context-caption";
+      if (!multiSession) {
+        service.id = "service-context";
+        account.id = "account-context";
+      }
+      pill.append(dot, service);
+      row.append(label, pill, account);
+      container.append(row);
+    }
+    const settings = {...target.settings, ...target.draft};
+    const account = (settings.chatgpt_accounts || []).find(item => item.id === settings.active_chatgpt_account_id);
+    const serviceName = settings.service === "gemini" ? "Google Gemini" : "ChatGPT";
+    const accountName = settings.service === "gemini" ? "Google Gemini" : account?.name || "—";
+    row.querySelector(".context-book").textContent = t("book_tab", {number: id.split("-").at(-1)});
+    row.querySelector(".context-book").hidden = !multiSession;
+    row.querySelector(".context-service").textContent = serviceName;
+    row.querySelector(".context-caption").textContent = accountName;
+    row.querySelector(".context-caption").title = accountName;
+    row.dataset.active = String(target === state);
+  });
+}
+
+function renderTabs() {
+  renderServiceContexts();
+  const container = $("#workflow-tabs");
+  container.classList.toggle("hidden", !multiSession);
+  container.setAttribute("aria-label", t("workflow_tabs"));
+  sessions.forEach((target, id) => {
+    let button = document.getElementById(`tab-${id}`);
+    if (!button) {
+      button = document.createElement("button");
+      button.type = "button";
+      button.id = `tab-${id}`;
+      button.className = "workflow-tab";
+      button.setAttribute("role", "tab");
+      button.setAttribute("aria-controls", "workflow-panel");
+      button.append(document.createElement("strong"), document.createElement("small"), document.createElement("small"));
+      button.addEventListener("click", () => switchSession(id));
+      button.addEventListener("keydown", (event) => {
+        if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+        event.preventDefault();
+        const ids = [...sessions.keys()];
+        const next = event.key === "Home" ? ids[0] : event.key === "End" ? ids.at(-1) : ids[(ids.indexOf(id) + (event.key === "ArrowRight" ? 1 : ids.length - 1)) % ids.length];
+        switchSession(next);
+        document.getElementById(`tab-${next}`).focus();
+      });
+      container.append(button);
+    }
+    const c = target.controller;
+    const attention = !!target.error || c.manual_action_required || ["error_detail", "waiting_quota_outcome", "needs_retry_outcome"].includes(c.status?.key);
+    const label = t("book_tab", {number: id.split("-").at(-1)});
+    const status = attention ? t("tab_attention") : c.running ? `${t("status_running")} ${c.progress_done || 0}/${c.progress_total || 0}` : c.auto_next_active ? t("tab_waiting") : t("ready");
+    button.firstElementChild.textContent = label;
+    const folder = c.folder_progress || {};
+    const folderStatus = t("tab_folder_progress", {done: folder.done ?? "—", total: folder.total ?? "—"});
+    button.children[1].textContent = status;
+    button.lastElementChild.textContent = folderStatus;
+    button.title = `${label}: ${status}\n${folderStatus}\n${target.settings.image_folder || ""}`;
+    button.setAttribute("aria-selected", String(target === state));
+    button.tabIndex = target === state ? 0 : -1;
+    button.dataset.attention = String(attention);
+  });
+  if (state.id) $("#workflow-panel").setAttribute("aria-labelledby", `tab-${state.id}`);
+}
+
+function renderSession() {
+  renderSettings();
+  renderController();
+  $("#log").textContent = state.controller.log_history || "";
+  $("#log").scrollTop = state.logScroll ?? $("#log").scrollHeight;
+  setNoticeText(state.error || "");
+  $("#notice").classList.toggle("hidden", !state.error);
+  renderTabs();
+}
+
+function switchSession(id) {
+  if (!sessions.has(id) || state.id === id) return;
+  captureDraft();
+  state = sessions.get(id);
+  renderSession();
+}
+
+function acceptSnapshot(target, snapshot) {
+  if (!snapshot || (snapshot.sequence || 0) < target.sequence) return;
+  target.controller = {...snapshot};
+  target.sequence = snapshot.sequence || 0;
+}
+
+async function refreshSession(target) {
+  if (target.refreshing) return;
+  target.refreshing = true;
+  try {
+    const initial = await sessionApi(target, "get_initial_state");
+    if ((initial.controller.sequence || 0) >= target.sequence) {
+      target.settings = initial.settings;
+      acceptSnapshot(target, initial.controller);
+      if (target === state) renderSession();
+    }
+  } catch (error) { showError(error, target); }
+  finally { target.refreshing = false; renderTabs(); }
 }
 
 function t(key, params = {}) {
@@ -31,12 +166,17 @@ function setNoticeText(text) {
   else notice.textContent = text;
 }
 
-function showError(error) {
-  setNoticeText(`${t("error")}: ${error?.message || error}`);
-  $("#notice").classList.remove("hidden");
+function showError(error, target = state) {
+  target.error = `${t("error")}: ${error?.message || error}`;
+  if (target === state) {
+    setNoticeText(target.error);
+    $("#notice").classList.remove("hidden");
+  }
+  renderTabs();
 }
 
 function clearError() {
+  state.error = "";
   $("#notice").classList.add("hidden");
 }
 
@@ -61,11 +201,11 @@ function renderText() {
   $$('[data-placeholder]').forEach((node) => {
     node.placeholder = t(node.dataset.placeholder);
   });
-  renderStatus();
+  renderController();
 }
 
 function renderSettings() {
-  const settings = state.settings;
+  const settings = {...state.settings, ...state.draft};
   $("#service").value = settings.service;
   $("#batch-size").value = settings.batch_size;
   $("#start-from").value = settings.start_from;
@@ -80,8 +220,8 @@ function renderSettings() {
   state.language = settings.language;
   setTheme(settings.theme);
   $("#accounts-card").classList.toggle("hidden", settings.service !== "chatgpt");
-  $("#service-context").textContent = settings.service === "gemini" ? "Google Gemini" : "ChatGPT";
   renderAccounts();
+  if (state.accountNameDraft !== undefined) $("#account-name").value = state.accountNameDraft;
   updatePathPresentation();
   renderText();
 }
@@ -99,8 +239,7 @@ function renderAccounts() {
   });
   const active = accounts.find((item) => item.id === select.value);
   $("#account-name").value = active?.name || "";
-  $("#account-context").textContent = state.settings.service === "chatgpt" ? active?.name || "—" : "Google Gemini";
-  $("#account-context").title = $("#account-context").textContent;
+  renderServiceContexts();
   $("#account-count").textContent = String(accounts.length);
 }
 
@@ -120,11 +259,14 @@ function formPayload() {
   };
 }
 
-async function save(showSavedStatus = false) {
-  const data = await api("save_settings", formPayload());
-  state.settings = data.settings;
-  renderSettings();
-  if (showSavedStatus) {
+async function save(showSavedStatus = false, target = state) {
+  captureDraft(target);
+  const payload = {...(target.draft || target.settings)};
+  const data = await sessionApi(target, "save_settings", payload);
+  target.settings = data.settings;
+  if (JSON.stringify(target.draft) === JSON.stringify(payload)) target.draft = null;
+  if (target === state) renderSettings();
+  if (showSavedStatus && target === state) {
     const copy = $("#status .status-copy");
     if (copy) copy.textContent = t("saved");
   }
@@ -145,6 +287,13 @@ function renderController() {
   const launchPending = !!state.launchPending;
   const manual = !!controller.manual_action_required;
   const autoNext = !!controller.auto_next_active;
+  $("#auto-panel").classList.toggle("hidden", !autoNext);
+  const remaining = state.remaining || 0;
+  const time = `${String(Math.floor(remaining / 60)).padStart(2, "0")}:${String(remaining % 60).padStart(2, "0")}`;
+  $("#countdown").textContent = controller.status?.key === "auto_countdown" ? t("auto_countdown", controller.status.params) : t("auto_countdown", {time});
+  $("#confirm-output").disabled = running || autoNext || launchPending;
+  $$('#configuration-card input, #configuration-card select, #configuration-card button').forEach((node) => { node.disabled = running || launchPending; });
+  $("#confirm-output").disabled = running || autoNext || launchPending;
 
   document.body.classList.toggle("is-running", running);
   $("#progress").value = percent;
@@ -164,6 +313,7 @@ function renderController() {
   const statusEl = $("#status");
   if (statusEl) statusEl.dataset.state = manual ? "warning" : running ? "running" : "idle";
   renderStatus();
+  renderTabs();
 }
 
 window.batchTranslatorReceive = (message) => {
@@ -171,64 +321,82 @@ window.batchTranslatorReceive = (message) => {
     pendingMessages.push(message);
     return;
   }
-  if (!message || message.sequence <= state.sequence) return;
-  if (state.sequence && message.sequence !== state.sequence + 1) {
-    setNoticeText(t("event_gap", {expected: state.sequence + 1, actual: message.sequence}));
-    $("#notice").classList.remove("hidden");
+  const target = sessions.get(message?.session_id || "book-1");
+  if (!target || !message || message.sequence <= target.sequence) return;
+  if (target.sequence && message.sequence !== target.sequence + 1) {
+    showError(t("event_gap", {expected: target.sequence + 1, actual: message.sequence}), target);
+    refreshSession(target);
   }
-
-  state.sequence = message.sequence;
+  target.sequence = message.sequence;
+  target.controller.sequence = message.sequence;
+  if (message.run_id) target.controller.run_id = message.run_id;
   const payload = message.payload || {};
   if (message.type === "log_appended") {
-    $("#log").textContent += payload.text || "";
-    $("#log").scrollTop = $("#log").scrollHeight;
+    target.controller.log_history = (target.controller.log_history || "") + (payload.text || "");
   }
-  if (message.type === "log_cleared") $("#log").textContent = "";
+  if (message.type === "log_cleared") target.controller.log_history = "";
   if (message.type === "progress_changed") {
-    state.controller.progress_done = payload.done;
-    state.controller.progress_total = payload.total;
+    target.controller.progress_done = payload.done;
+    target.controller.progress_total = payload.total;
   }
-  if (message.type === "process_started") state.controller.running = true;
-  if (message.type === "process_completed") state.controller.running = false;
-  if (message.type === "manual_action_required") state.controller.manual_action_required = true;
-  if (message.type === "continue_sent" || message.type === "process_completed") state.controller.manual_action_required = false;
-  if (message.type === "batch_result") state.controller.current_batch_result = payload.result;
-  if (message.type === "status_changed") state.controller.status = payload;
+  if (message.type === "folder_progress_changed") target.controller.folder_progress = payload;
+  if (message.type === "process_started") target.controller.running = true;
+  if (message.type === "process_completed") target.controller.running = false;
+  if (message.type === "manual_action_required") target.controller.manual_action_required = true;
+  if (message.type === "continue_sent" || message.type === "process_completed") target.controller.manual_action_required = false;
+  if (message.type === "batch_result") target.controller.current_batch_result = payload.result;
+  if (message.type === "status_changed") target.controller.status = payload;
   if (message.type === "auto_next_scheduled") {
-    state.controller.auto_next_active = true;
-    $("#auto-panel").classList.remove("hidden");
+    target.controller.auto_next_active = true;
   }
   if (message.type === "auto_next_tick") {
-    const remaining = payload.remaining || 0;
-    const time = `${String(Math.floor(remaining / 60)).padStart(2, "0")}:${String(remaining % 60).padStart(2, "0")}`;
-    $("#countdown").textContent = t("auto_countdown", {time});
+    target.remaining = payload.remaining || 0;
   }
   if (message.type === "auto_next_cancelled" || message.type === "auto_next_running") {
-    state.controller.auto_next_active = false;
-    $("#auto-panel").classList.add("hidden");
+    target.controller.auto_next_active = false;
   }
   if (message.type === "account_event" && payload.event?.event === "account_switched") {
-    state.settings.active_chatgpt_account_id = payload.event.account_id;
-    const account = state.settings.chatgpt_accounts.find((item) => item.id === payload.event.account_id);
-    if (account) state.settings.profile_dir = account.profile_dir;
+    target.settings.active_chatgpt_account_id = payload.event.account_id;
+    const account = target.settings.chatgpt_accounts.find((item) => item.id === payload.event.account_id);
+    if (account) {
+      target.settings.profile_dir = account.profile_dir;
+      if (target.draft) target.draft.profile_dir = account.profile_dir;
+    }
+    delete target.accountNameDraft;
+    if (target === state) renderSettings();
+  }
+  if (message.type === "preferences_changed") {
+    sessions.forEach((item) => {
+      Object.assign(item.settings, payload);
+      if (item.draft) Object.assign(item.draft, payload);
+      if (payload.language) item.language = payload.language;
+    });
     renderSettings();
   }
   if (["bridge_error", "reader_error", "continue_error"].includes(message.type)) {
-    showError(payload.error || message.type);
+    showError(payload.error || message.type, target);
   }
-  renderController();
+  if (target === state) {
+    if (["log_appended", "log_cleared"].includes(message.type)) {
+      $("#log").textContent = target.controller.log_history;
+      $("#log").scrollTop = $("#log").scrollHeight;
+    }
+    renderController();
+  }
+  renderTabs();
 };
 
 async function initialize() {
   try {
     const initial = await api("get_initial_state");
-    Object.assign(state, initial);
-    state.language = initial.settings.language;
-    state.sequence = initial.controller.sequence || 0;
+    multiSession = !!initial.sessions;
+    Object.entries(initial.sessions || {"book-1": initial}).forEach(([id, item]) => {
+      sessions.set(id, {...item, id, localization: initial.localization, language: initial.settings.language,
+        sequence: item.controller.sequence || 0, initialized: true, launchPending: false});
+    });
+    state = sessions.get(initial.active_session_id || "book-1");
     $("#backend").textContent = initial.capabilities.webview_backend;
-    $("#log").textContent = initial.controller.log_history || "";
-    renderSettings();
-    renderController();
+    renderSession();
     bind();
     state.initialized = true;
     pendingMessages
@@ -241,56 +409,90 @@ async function initialize() {
 }
 
 function bind() {
-  $("#save").addEventListener("click", () => save(true).catch(showError));
+  $("#save").addEventListener("click", () => {
+    const target = state;
+    save(true, target).catch((error) => showError(error, target));
+  });
   $$('[data-folder]').forEach((button) => button.addEventListener("click", async () => {
+    const target = state;
+    captureDraft(target);
     try {
-      const result = await api("choose_folder", button.dataset.folder);
+      const result = await sessionApi(target, "choose_folder", button.dataset.folder);
       if (!result.cancelled) {
-        $(`#${button.dataset.folder}-folder`).value = result.path;
-        updatePathPresentation();
+        const key = {source: "image_folder", output: "download_folder", profile: "profile_dir"}[button.dataset.folder];
+        target.draft = {...(target.draft || {}), [key]: result.path};
+        if (target === state) renderSettings();
       }
     } catch (error) {
-      showError(error);
+      showError(error, target);
     }
   }));
   $$('[data-mode]').forEach((button) => button.addEventListener("click", async () => {
-    if (state.launchPending || state.controller.running) return;
-    state.launchPending = true;
+    const target = state;
+    if (target.launchPending || target.controller.running) return;
+    captureDraft(target);
+    target.launchPending = true;
     renderController();
     try {
       clearError();
-      await save();
-      const data = await api("start_batch", button.dataset.mode);
-      if (data?.state) state.controller = {...state.controller, ...data.state};
+      await save(false, target);
+      const data = await sessionApi(target, "start_batch", button.dataset.mode);
+      if (data?.state) acceptSnapshot(target, data.state);
     } catch (error) {
-      showError(error);
+      showError(error, target);
     } finally {
-      state.launchPending = false;
+      target.launchPending = false;
       renderController();
     }
   }));
-  $("#stop").addEventListener("click", () => api("stop_process").catch(showError));
-  $("#continue").addEventListener("click", () => api("continue_manual_intervention").catch(showError));
-  $("#cancel-auto").addEventListener("click", () => api("cancel_auto_next").catch(showError));
-  $("#run-now").addEventListener("click", () => api("run_auto_next_now").catch(showError));
-  $("#open-output").addEventListener("click", async () => {
-    try {
-      await api("open_output_folder");
-    } catch (error) {
-      showError(error);
-    }
+  Object.entries({stop: "stop_process", continue: "continue_manual_intervention", "cancel-auto": "cancel_auto_next",
+    "run-now": "run_auto_next_now", "open-output": "open_output_folder", "copy-log": "copy_log", "export-log": "export_log", "clear-log": "clear_log"}).forEach(([id, method]) => {
+    $(`#${id}`).addEventListener("click", async () => {
+      const target = state;
+      try {
+        const data = await sessionApi(target, method);
+        if (data.state) acceptSnapshot(target, data.state);
+        if (target === state) renderController();
+      } catch (error) { showError(error, target); }
+    });
   });
-  $("#copy-log").addEventListener("click", () => api("copy_log").catch(showError));
-  $("#export-log").addEventListener("click", () => api("export_log").catch(showError));
-  $("#clear-log").addEventListener("click", () => api("clear_log").catch(showError));
+  $("#confirm-output").addEventListener("click", async () => {
+    const target = state;
+    captureDraft(target);
+    if (!confirm(`${t("confirm_output_question")}\n\n${target.draft.image_folder}\n→ ${target.draft.download_folder}`)) return;
+    target.launchPending = true;
+    renderController();
+    try {
+      await save(false, target);
+      await sessionApi(target, "confirm_existing_output");
+      target.error = "";
+      if (target === state) { setNoticeText(t("output_confirmed")); $("#notice").classList.remove("hidden"); }
+    } catch (error) { showError(error, target); }
+    finally { target.launchPending = false; renderController(); }
+  });
   $("#theme").addEventListener("change", async (event) => {
-    setTheme(event.target.value);
-    try { await save(); } catch (error) { showError(error); }
+    const theme = event.target.value;
+    const version = ++preferenceVersions.theme;
+    setTheme(theme);
+    try {
+      await api("set_theme", theme);
+      if (version === preferenceVersions.theme) {
+        sessions.forEach((target) => { target.settings.theme = theme; if (target.draft) target.draft.theme = theme; });
+      }
+    } catch (error) { showError(error); }
   });
   $("#language").addEventListener("change", async (event) => {
+    const version = ++preferenceVersions.language;
     state.language = event.target.value;
     renderText();
-    try { await save(); } catch (error) { showError(error); }
+    try {
+      const language = event.target.value;
+      await api("set_language", language);
+      if (version === preferenceVersions.language) {
+        sessions.forEach((target) => { target.settings.language = language; target.language = language; if (target.draft) target.draft.language = language; });
+      }
+      renderTabs();
+    } catch (error) { showError(error); }
   });
   $("#service").addEventListener("change", () => {
     const service = $("#service").value;
@@ -301,27 +503,34 @@ function bind() {
       $("#profile-folder").value = state.settings.gemini_profile_dir;
     }
     $("#accounts-card").classList.toggle("hidden", service !== "chatgpt");
-    $("#service-context").textContent = service === "gemini" ? "Google Gemini" : "ChatGPT";
+    captureDraft();
     updatePathPresentation();
   });
-  $("#account-select").addEventListener("change", async (event) => {
-    try {
-      const data = await api("select_account", event.target.value);
-      state.settings.chatgpt_accounts = data.accounts;
-      state.settings.active_chatgpt_account_id = data.active_id;
-      const account = data.accounts.find((item) => item.id === data.active_id);
-      state.settings.profile_dir = account.profile_dir;
-      renderSettings();
-    } catch (error) {
-      showError(error);
-    }
-  });
+  $("#account-select").addEventListener("change", (event) => accountAction("select_account", event.target.value));
   $("#account-add").addEventListener("click", () => accountAction("add_account", null, $("#account-name").value));
   $("#account-rename").addEventListener("click", () => accountAction("rename_account", $("#account-select").value, $("#account-name").value));
   $("#account-remove").addEventListener("click", () => {
     if (confirm(t("remove"))) accountAction("remove_account", $("#account-select").value);
   });
-  $("#account-login").addEventListener("click", () => api("login_account", $("#account-select").value).catch(showError));
+  $("#account-login").addEventListener("click", async () => {
+    const target = state;
+    const accountId = $("#account-select").value;
+    target.launchPending = true;
+    renderController();
+    try {
+      const data = await sessionApi(target, "login_account", accountId);
+      acceptSnapshot(target, data.state);
+    } catch (error) { showError(error, target); }
+    finally { target.launchPending = false; renderController(); }
+  });
+  // Keep navigation and keyboard focus below the pinned header as text wraps.
+  const workspaceHeader = $(".workspace-header");
+  const headerObserver = new ResizeObserver(() => {
+    const offset = workspaceHeader.getBoundingClientRect().height + $(".titlebar").getBoundingClientRect().height + 12;
+    document.documentElement.style.setProperty("--workspace-scroll-offset", `${offset}px`);
+  });
+  headerObserver.observe(workspaceHeader);
+  headerObserver.observe($(".titlebar"));
   $$('[data-scroll-target]').forEach((button) => button.addEventListener("click", () => {
     const target = document.getElementById(button.dataset.scrollTarget);
     if (target) target.scrollIntoView({behavior: "smooth", block: "start"});
@@ -330,20 +539,31 @@ function bind() {
   ["source-folder", "output-folder", "profile-folder"].forEach((id) => {
     $(`#${id}`).addEventListener("input", updatePathPresentation);
   });
+  $$('#configuration-card input, #configuration-card select, #account-name').forEach((node) => {
+    node.addEventListener("input", () => captureDraft());
+    node.addEventListener("change", () => captureDraft());
+  });
 }
 
 async function accountAction(method, id, name) {
+  const target = state;
+  captureDraft(target);
+  target.launchPending = true;
+  renderController();
   try {
     const args = method === "add_account" ? [name] : method === "rename_account" ? [id, name] : [id];
-    const data = await api(method, ...args);
-    state.settings.chatgpt_accounts = data.accounts;
-    state.settings.active_chatgpt_account_id = data.active_id;
+    const data = await sessionApi(target, method, ...args);
+    target.settings.chatgpt_accounts = data.accounts;
+    target.settings.active_chatgpt_account_id = data.active_id;
     const account = data.accounts.find((item) => item.id === data.active_id);
-    state.settings.profile_dir = account.profile_dir;
-    renderSettings();
+    target.settings.profile_dir = account.profile_dir;
+    if (target.draft) target.draft.profile_dir = account.profile_dir;
+    delete target.accountNameDraft;
+    if (target === state) renderSettings();
   } catch (error) {
-    showError(error);
+    showError(error, target);
   }
+  finally { target.launchPending = false; renderController(); renderServiceContexts(); }
 }
 
 if (window.pywebview?.api) initialize();
@@ -382,6 +602,69 @@ function updateMaximizeState(isMax) {
     zoom.title = isMax ? "Khôi phục" : "Phóng to";
   }
 }
+
+/* easy_drag only handles mouse events. Capture touch/pen on the titlebar and
+   use screen coordinates so moving the window cannot feed back into deltas. */
+const titlebar = $(".titlebar");
+let chromeDrag = null;
+let pendingWindowPosition = null;
+let movingWindow = false;
+
+async function flushWindowPosition() {
+  if (movingWindow) return;
+  movingWindow = true;
+  try {
+    // Coalesce moves while the native bridge is busy; never reorder positions.
+    while (pendingWindowPosition) {
+      const position = pendingWindowPosition;
+      pendingWindowPosition = null;
+      await api("move_window", position.x, position.y);
+    }
+  } catch (error) {
+    pendingWindowPosition = null;
+    console.error("Window drag failed:", error);
+  } finally {
+    movingWindow = false;
+  }
+}
+
+titlebar.addEventListener("pointerdown", (event) => {
+  if (!["touch", "pen"].includes(event.pointerType) || !event.isPrimary || chromeDrag) return;
+  if (event.target.closest('[data-window-drag="no"], button, input, select, textarea, label')) return;
+  if (!window.pywebview?.api?.move_window || document.body.classList.contains("is-maximized")) return;
+  titlebar.setPointerCapture(event.pointerId);
+  chromeDrag = {id: event.pointerId, x: event.clientX, y: event.clientY,
+    startX: event.screenX, startY: event.screenY, moved: false};
+  event.preventDefault(); // Suppress compatibility mouse events and duplicate easy_drag.
+});
+
+function moveChromePointer(event) {
+  if (!chromeDrag || chromeDrag.id !== event.pointerId) return;
+  event.preventDefault();
+  if (!chromeDrag.moved && Math.hypot(event.screenX - chromeDrag.startX, event.screenY - chromeDrag.startY) < 4) return;
+  chromeDrag.moved = true;
+  pendingWindowPosition = {x: Math.round(event.screenX - chromeDrag.x),
+    y: Math.round(event.screenY - chromeDrag.y)};
+  void flushWindowPosition();
+}
+titlebar.addEventListener("pointermove", moveChromePointer);
+titlebar.addEventListener("pointerup", (event) => {
+  if (!chromeDrag || chromeDrag.id !== event.pointerId) return;
+  moveChromePointer(event);
+  chromeDrag = null;
+  if (titlebar.hasPointerCapture(event.pointerId)) titlebar.releasePointerCapture(event.pointerId);
+});
+function cancelChromeDrag(event) {
+  if (event && chromeDrag?.id !== event.pointerId) return;
+  chromeDrag = null;
+  pendingWindowPosition = null;
+}
+titlebar.addEventListener("pointercancel", cancelChromeDrag);
+titlebar.addEventListener("lostpointercapture", cancelChromeDrag);
+window.addEventListener("blur", () => cancelChromeDrag());
+titlebar.addEventListener("contextmenu", (event) => {
+  if (!event.target.closest('[data-window-drag="no"]')) event.preventDefault();
+});
 
 async function handleWindowAction(action) {
   try {

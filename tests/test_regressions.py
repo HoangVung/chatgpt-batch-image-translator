@@ -64,6 +64,13 @@ class Clock:
 
 
 class BatchSelectionTests(unittest.TestCase):
+    def test_retry_skips_valid_output_despite_stale_failure_status(self):
+        images = [Path("valid.jpg"), Path("failed.jpg")]
+        with patch.object(worker, "RUN_MODE", "retry"), patch.object(
+            worker, "read_latest_status", return_value={p.name: {"status": "error"} for p in images}
+        ), patch.object(worker, "output_file_exists", side_effect=lambda p: p.name == "valid.jpg"):
+            self.assertEqual(worker.get_next_batch(images), [images[1]])
+
     def setUp(self):
         self.images = [
             Path("01_101.jpg"),
@@ -156,6 +163,8 @@ class ProgressTests(unittest.TestCase):
             "state": "pending",
         }
         with patch.object(worker, "ensure_dirs"), \
+             patch.object(worker, "START_FROM", ""), \
+             patch.object(worker, "RUN_MODE", "main"), \
              patch.object(worker, "init_progress"), \
              patch.object(worker, "get_images", return_value=[image]), \
              patch.object(worker, "get_next_batch", return_value=[image]), \

@@ -10,6 +10,7 @@ if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from desktop.web_api import WebApi
+from desktop.workflow_sessions import SessionManager
 from desktop.window_identity import (
     enable_windows_taskbar_minimize,
     set_windows_app_user_model_id,
@@ -39,91 +40,113 @@ class WebBridge:
     def __init__(self, api: WebApi) -> None:
         self._api = api
 
-    def get_initial_state(self):
-        return self._api.get_initial_state()
+    def _call(self, method, args=(), session_id=None):
+        if isinstance(self._api, SessionManager):
+            return self._api._invoke(method, args, session_id)
+        return getattr(self._api, method)(*args)
+
+    def get_initial_state(self, session_id=None):
+        return self._call("get_initial_state", session_id=session_id)
 
     def get_platform_capabilities(self):
-        return self._api.get_platform_capabilities()
+        return self._call("get_platform_capabilities")
 
-    def save_settings(self, payload):
-        return self._api.save_settings(payload)
+    def save_settings(self, payload, session_id=None):
+        return self._call("save_settings", (payload,), session_id)
 
-    def choose_folder(self, kind):
-        return self._api.choose_folder(kind)
+    def choose_folder(self, kind, session_id=None):
+        return self._call("choose_folder", (kind,), session_id)
 
-    def start_batch(self, mode):
-        return self._api.start_batch(mode)
+    def start_batch(self, mode, session_id=None):
+        return self._call("start_batch", (mode,), session_id)
 
-    def stop_process(self):
-        return self._api.stop_process()
+    def stop_process(self, session_id=None):
+        return self._call("stop_process", session_id=session_id)
 
-    def continue_manual_intervention(self):
-        return self._api.continue_manual_intervention()
+    def continue_manual_intervention(self, session_id=None):
+        return self._call("continue_manual_intervention", session_id=session_id)
 
-    def cancel_auto_next(self):
-        return self._api.cancel_auto_next()
+    def cancel_auto_next(self, session_id=None):
+        return self._call("cancel_auto_next", session_id=session_id)
 
-    def run_auto_next_now(self):
-        return self._api.run_auto_next_now()
+    def run_auto_next_now(self, session_id=None):
+        return self._call("run_auto_next_now", session_id=session_id)
 
-    def list_accounts(self):
-        return self._api.list_accounts()
+    def list_accounts(self, session_id=None):
+        return self._call("list_accounts", session_id=session_id)
 
-    def select_account(self, account_id):
-        return self._api.select_account(account_id)
+    def select_account(self, account_id, session_id=None):
+        return self._call("select_account", (account_id,), session_id)
 
-    def add_account(self, name):
-        return self._api.add_account(name)
+    def add_account(self, name, session_id=None):
+        return self._call("add_account", (name,), session_id)
 
-    def rename_account(self, account_id, name):
-        return self._api.rename_account(account_id, name)
+    def rename_account(self, account_id, name, session_id=None):
+        return self._call("rename_account", (account_id, name), session_id)
 
-    def remove_account(self, account_id):
-        return self._api.remove_account(account_id)
+    def remove_account(self, account_id, session_id=None):
+        return self._call("remove_account", (account_id,), session_id)
 
-    def login_account(self, account_id):
-        return self._api.login_account(account_id)
+    def login_account(self, account_id, session_id=None):
+        return self._call("login_account", (account_id,), session_id)
 
     def set_language(self, language):
-        return self._api.set_language(language)
+        return self._call("set_language", (language,))
 
     def set_theme(self, theme):
-        return self._api.set_theme(theme)
+        return self._call("set_theme", (theme,))
 
     def minimize_window(self):
-        return self._api.minimize_window()
+        return self._call("minimize_window")
+
+    def move_window(self, x, y):
+        return self._call("move_window", (x, y))
 
     def toggle_maximize_window(self):
-        return self._api.toggle_maximize_window()
+        return self._call("toggle_maximize_window")
 
     def close_window(self):
-        return self._api.close_window()
+        return self._call("close_window")
 
-    def open_output_folder(self):
-        return self._api.open_output_folder()
+    def open_output_folder(self, session_id=None):
+        return self._call("open_output_folder", session_id=session_id)
 
-    def copy_log(self):
-        return self._api.copy_log()
+    def copy_log(self, session_id=None):
+        return self._call("copy_log", session_id=session_id)
 
-    def export_log(self):
-        return self._api.export_log()
+    def export_log(self, session_id=None):
+        return self._call("export_log", session_id=session_id)
 
-    def clear_log(self):
-        return self._api.clear_log()
+    def clear_log(self, session_id=None):
+        return self._call("clear_log", session_id=session_id)
+
+    def confirm_existing_output(self, session_id=None):
+        return self._call("confirm_existing_output", session_id=session_id)
 
 
 def run_packaged_worker() -> int:
-    import run_chatgpt_batch
+    try:
+        import run_chatgpt_batch
 
-    return int(run_chatgpt_batch.main() or 0)
+        return int(run_chatgpt_batch.run_guarded() or 0)
+    except Exception:
+        # The parent owns error reporting. An unhandled exception in a
+        # windowed EXE would instead leave a blocking PyInstaller dialog.
+        import traceback
+
+        stream = sys.stderr or sys.stdout
+        if stream is not None:
+            traceback.print_exc(file=stream)
+        return 1
 
 
 def run_self_test() -> int:
-    api = WebApi()
+    api = SessionManager()
     try:
-        initial = api.get_initial_state()
+        initial = api._invoke("get_initial_state")
         checks = {
-            "controller": api.controller.__class__.__name__ == "DesktopController",
+            "controller": all(item.controller.__class__.__name__ == "DesktopController" for item in api.sessions.values()),
+            "two_sessions": len(initial.get("data", {}).get("sessions", {})) == 2,
             "initial_state": initial.get("ok") is True,
             "local_assets": all((RESOURCE_ROOT / "ui" / name).is_file() for name in ("index.html", "styles.css", "app.js")),
             "default_shell_untouched": (api.app_dir / "app.pyw").is_file() or bool(getattr(sys, "frozen", False)),
@@ -148,7 +171,7 @@ def run_webview() -> None:
                 "pywebview is not installed; use --tk for the CustomTkinter shell."
             ) from exc
 
-        api = WebApi()
+        api = SessionManager()
         bridge = WebBridge(api)
         set_windows_app_user_model_id()
         window = webview.create_window(
@@ -189,6 +212,8 @@ def run_webview() -> None:
         if hasattr(window.events, "shown"):
             window.events.shown += on_shown
         window.events.closed += on_closed
+        if hasattr(window.events, "closing"):
+            window.events.closing += api._confirm_close
         icon = str(WINDOWS_ICON_FILE) if WINDOWS_ICON_FILE.is_file() else None
         # easy_drag=True lets the user drag the frameless window from any empty
         # chrome region. Buttons/inputs opt out via [data-window-drag="no"].

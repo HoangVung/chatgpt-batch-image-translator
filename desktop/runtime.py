@@ -5,6 +5,9 @@ from __future__ import annotations
 import json
 import os
 import sys
+import tempfile
+import uuid
+from copy import deepcopy
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -107,7 +110,22 @@ def load_settings(path: Path, defaults: Mapping[str, Any]) -> dict[str, Any]:
 
 def save_settings(path: Path, settings: Mapping[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(dict(settings), ensure_ascii=False, indent=2), encoding="utf-8")
+    handle, name = tempfile.mkstemp(prefix=path.name + ".", suffix=".part", dir=path.parent)
+    try:
+        with os.fdopen(handle, "w", encoding="utf-8") as stream:
+            json.dump(dict(settings), stream, ensure_ascii=False, indent=2)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(name, path)
+    finally:
+        if os.path.exists(name):
+            os.unlink(name)
+
+
+def write_launch_snapshot(settings: Mapping[str, Any], directory: Path) -> Path:
+    path = directory / (uuid.uuid4().hex + ".json")
+    save_settings(path, settings)
+    return path.resolve()
 
 
 def normalize_chatgpt_accounts(settings: dict[str, Any], data_dir: Path) -> list[dict[str, str]]:
@@ -179,7 +197,7 @@ def apply_form_settings(current: dict[str, Any], payload: Any, data_dir: Path) -
     if payload.get("language", current.get("language")) not in {"vi", "en"}:
         raise ValueError("language must be vi or en")
 
-    updated = {**current, **payload}
+    updated = {**deepcopy(current), **payload}
     normalize_chatgpt_accounts(updated, data_dir)
     profile = str(updated.get("profile_dir", "")).strip()
     if updated["service"] == "chatgpt":
@@ -203,6 +221,8 @@ def build_process_launch(
     frozen: bool | None = None,
     environ: Mapping[str, str] | None = None,
     os_name: str | None = None,
+    data_dir: Path | None = None,
+    settings_file: Path | None = None,
 ) -> ProcessLaunch:
     if mode not in {"main", "retry", "force", "login"}:
         raise ValueError("unsupported run mode")
@@ -210,16 +230,21 @@ def build_process_launch(
     executable = executable or sys.executable
     frozen = bool(getattr(sys, "frozen", False)) if frozen is None else frozen
     os_name = os.name if os_name is None else os_name
-    normalize_chatgpt_accounts(settings, get_data_dir(app_dir))
+    data_dir = Path(data_dir or get_data_dir(app_dir))
+    normalize_chatgpt_accounts(settings, data_dir)
     service = settings.get("service", "chatgpt")
     profile = (
-        get_active_chatgpt_account(settings, get_data_dir(app_dir))["profile_dir"]
+        get_active_chatgpt_account(settings, data_dir)["profile_dir"]
         if service == "chatgpt"
         else settings["gemini_profile_dir"]
     )
     settings["profile_dir"] = profile
 
     env = dict(environ or os.environ)
+    # Never inherit a snapshot belonging to the process that launched this UI.
+    env.pop("BATCH_TRANSLATOR_SETTINGS_FILE", None)
+    if settings_file is not None:
+        env["BATCH_TRANSLATOR_SETTINGS_FILE"] = str(settings_file.resolve())
     env.update({
         "IMAGE_FOLDER": str(settings.get("image_folder", "")),
         "DOWNLOAD_FOLDER": str(settings.get("download_folder", "")),

@@ -28,9 +28,11 @@ from desktop.runtime import (
     make_default_settings,
     normalize_chatgpt_accounts,
     save_settings as write_settings,
+    write_launch_snapshot,
 )
 from desktop.web_scheduler import WebScheduler
 from desktop.web_text import WEB_TEXT
+from desktop.folder_progress import FolderProgress
 
 
 VALID_MODES = {"main", "retry", "force"}
@@ -79,8 +81,13 @@ class WebApi:
         app_dir: Path | None = None,
         settings_path: Path | None = None,
         data_dir: Path | None = None,
+        session_id: str = "book-1",
     ) -> None:
         self.app_dir = Path(app_dir or get_app_dir())
+        self.session_id = session_id
+        self.run_id = ""
+        self._launch_validator = None
+        self._snapshot_path = None
         self.data_dir = Path(data_dir or get_data_dir(self.app_dir))
         self.settings_path = Path(settings_path or (self.data_dir / "app_settings.json"))
         self.defaults = make_default_settings(self.data_dir)
@@ -94,10 +101,15 @@ class WebApi:
         self.sequence = 0
         self.sent_events: list[dict[str, Any]] = []
         self._event_lock = threading.Lock()
-        self._dispatch_lock = threading.Lock()
+        self._dispatch_lock = self.controller._lock
         self._stop_dispatcher = threading.Event()
         self._dispatcher: threading.Thread | None = None
         self._closed = False
+        self._folder_progress = FolderProgress()
+        self._folder_progress_key = None
+        self._folder_progress_value = {"done": None, "total": None}
+        self._folder_progress_thread = None
+        self._folder_progress_dirty = False
         self._configure_controller()
 
     def _attach_window(self, window: Any) -> None:
@@ -129,6 +141,7 @@ class WebApi:
                     try:
                         self._adapt_controller_event(event)
                     except Exception as exc:
+                        self._set_status("error_detail", error=str(exc))
                         delivered.append(self._push_event(
                             "bridge_error",
                             {"source_event": event.type, "error": str(exc)},
@@ -139,6 +152,7 @@ class WebApi:
         with self._event_lock:
             self.sequence += 1
             message = {"sequence": self.sequence, "type": event_type, "payload": json_safe(payload)}
+            message.update(session_id=self.session_id, run_id=self.run_id)
             self.sent_events.append(message)
         if self.window is not None and not self._closed:
             encoded = json.dumps(message, ensure_ascii=False).replace("</", "<\\/")
@@ -152,6 +166,10 @@ class WebApi:
 
     def _adapt_controller_event(self, event: ControllerEvent) -> None:
         kind, data = event.type, event.data
+        if kind in {"progress_changed", "process_completed"}:
+            self._request_folder_progress(refresh=True)
+        if kind == "process_completed":
+            self._remove_snapshot()
         if kind == "process_started":
             self._set_status("status_running")
             self._append_log(f"\n=== {data['mode'].upper()} ===\n")
@@ -185,7 +203,9 @@ class WebApi:
             self._set_status("auto_cancelled")
         elif kind == "auto_next_start_requested":
             if not self._closed:
-                self._start("main", auto_started=True)
+                self._start(data.get("mode", "main"), auto_started=True)
+        elif kind == "auto_recovery":
+            self._append_log("\n" + self._text(data["reason"]) + "\n")
         elif kind == "auto_next_recovered":
             self._append_log("\n" + self._text("auto_next_recovered", code=data["code"]) + "\n")
         elif kind == "auto_next_skipped":
@@ -259,11 +279,52 @@ class WebApi:
             delay = None
         self.controller.configure_auto_next(bool(self.settings.get("auto_next_enabled", False)), delay)
 
+    def _request_folder_progress(self, *, refresh=False):
+        # Drive/network files may block for minutes. Never scan them while
+        # holding the shared workflow/controller lock or answering the bridge.
+        with self._dispatch_lock:
+            key = tuple(str(self.settings.get(name, "")).strip()
+                        for name in ("image_folder", "download_folder"))
+            if key != self._folder_progress_key:
+                self._folder_progress_key = key
+                self._folder_progress_value = {"done": None, "total": None}
+                self._folder_progress_dirty = True
+            self._folder_progress_dirty |= refresh
+            if not self._closed and self._folder_progress_dirty and self._folder_progress_thread is None:
+                self._folder_progress_dirty = False
+                settings = dict(zip(("image_folder", "download_folder"), key))
+                self._folder_progress_thread = threading.Thread(
+                    target=self._read_folder_progress, args=(key, settings), daemon=True,
+                    name=f"folder-progress-{self.session_id}",
+                )
+                self._folder_progress_thread.start()
+            return dict(self._folder_progress_value)
+
+    def _read_folder_progress(self, key, settings):
+        try:
+            value = self._folder_progress.read(settings)
+        except Exception:
+            value = {"done": None, "total": None}
+        with self._dispatch_lock:
+            self._folder_progress_thread = None
+            if self._closed:
+                return
+            current_key = tuple(str(self.settings.get(name, "")).strip()
+                                for name in ("image_folder", "download_folder"))
+            if key == current_key:
+                self._folder_progress_value = value
+                self._push_event("folder_progress_changed", value)
+            # Coalesce changes during a scan; discard results for old folders.
+            self._request_folder_progress()
+
     def _snapshot(self) -> dict[str, Any]:
+        folder_progress = self._request_folder_progress()
         state = asdict(self.controller.state)
         state["status"] = dict(self.status)
         state["log_history"] = "".join(self.controller.log_history)
         state["sequence"] = self.sequence
+        state["run_id"] = self.run_id
+        state["folder_progress"] = folder_progress
         return json_safe(state)
 
     def _public_settings(self) -> dict[str, Any]:
@@ -312,6 +373,7 @@ class WebApi:
                 self.controller.mark_run_configuration_changed()
             self._configure_controller()
             self._dispatch_once()
+            self._request_folder_progress(refresh=True)
             return success({"settings": self._public_settings()})
         except Exception as exc:
             return failure(exc)
@@ -358,11 +420,28 @@ class WebApi:
         script = self.app_dir / "run_chatgpt_batch.py"
         if not getattr(sys, "frozen", False) and not script.is_file():
             raise FileNotFoundError(f"worker not found: {script}")
+        if self._closed:
+            raise RuntimeError("window is closing")
+        if self._launch_validator:
+            self._launch_validator(self, mode)
         write_settings(self.settings_path, self.settings)
         self._configure_controller()
-        launch = build_process_launch(self.settings, mode, app_dir=self.app_dir)
-        if not self.controller.start(mode, launch, auto_started=auto_started):
-            raise RuntimeError("a batch is already running")
+        self._remove_snapshot()
+        self._snapshot_path = write_launch_snapshot(self._public_settings(), self.data_dir / "run_configs")
+        self.run_id = uuid.uuid4().hex
+        try:
+            launch = build_process_launch(self.settings, mode, app_dir=self.app_dir,
+                                          data_dir=self.data_dir, settings_file=self._snapshot_path)
+            if not self.controller.start(mode, launch, auto_started=auto_started):
+                raise RuntimeError("a batch is already running")
+        except BaseException:
+            self._remove_snapshot()
+            raise
+
+    def _remove_snapshot(self):
+        if self._snapshot_path is not None:
+            self._snapshot_path.unlink(missing_ok=True)
+            self._snapshot_path = None
 
     def stop_process(self) -> dict[str, Any]:
         try:
@@ -526,6 +605,22 @@ class WebApi:
     def set_theme(self, code: Any) -> dict[str, Any]:
         return self.save_settings({"theme": code})
 
+    def move_window(self, x: Any, y: Any) -> dict[str, Any]:
+        """Move the shared window for a captured titlebar touch gesture."""
+        try:
+            if self.window is None:
+                raise RuntimeError("window is not attached")
+            if any(isinstance(v, bool) or not isinstance(v, (int, float))
+                   or not math.isfinite(v) or abs(v) > 1_000_000 for v in (x, y)):
+                raise ValueError("Invalid window coordinates")
+            native = getattr(self.window, "native", None)
+            if getattr(self, "_is_zoomed", False) or str(getattr(native, "WindowState", "")).lower() == "maximized":
+                return success({"moved": False})
+            self.window.move(int(x), int(y))
+            return success({"moved": True})
+        except Exception as exc:
+            return failure(exc)
+
     def minimize_window(self) -> dict[str, Any]:
         """Minimize the host pywebview window. Used by the Mac-style traffic light."""
         try:
@@ -591,6 +686,8 @@ class WebApi:
 
     def open_output_folder(self) -> dict[str, Any]:
         try:
+            if not str(self.settings.get("download_folder", "")).strip():
+                raise ValueError("Chưa chọn thư mục kết quả / Select an output folder.")
             folder = Path(str(self.settings.get("download_folder", "")))
             folder.mkdir(parents=True, exist_ok=True)
             if os.name == "nt":
@@ -667,6 +764,8 @@ class WebApi:
 
     def export_log(self) -> dict[str, Any]:
         try:
+            if not str(self.settings.get("download_folder", "")).strip():
+                raise ValueError("Chưa chọn thư mục kết quả / Select an output folder.")
             text = "".join(self.controller.log_history)
             if not text.strip():
                 raise ValueError("log is empty")
@@ -693,3 +792,5 @@ class WebApi:
         with self._dispatch_lock:
             self.controller.shutdown()
             self.scheduler.shutdown()
+            if not self.controller.is_running():
+                self._remove_snapshot()
