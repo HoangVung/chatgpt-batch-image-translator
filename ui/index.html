@@ -101,21 +101,6 @@
             </div>
           </section>
 
-          <section class="glass card action-card">
-            <div class="section-title"><div><p class="section-kicker">Batch control</p><h2 data-i18n="actions">Actions</h2></div><span id="run-indicator" class="run-indicator"><span></span><span data-i18n="ready">Ready</span></span></div>
-            <div class="mode-actions">
-              <button data-mode="main" class="button primary main-action" type="button"><span class="button-glyph" aria-hidden="true">▶</span><span data-i18n="main">Run new batch</span></button>
-              <button data-mode="retry" class="button secondary" type="button"><span class="button-glyph" aria-hidden="true">↻</span><span data-i18n="retry">Retry failed</span></button>
-              <button data-mode="force" class="button secondary" type="button"><span class="button-glyph" aria-hidden="true">↯</span><span data-i18n="force">Rerun image</span></button>
-            </div>
-            <div class="intervention-actions"><button id="continue" class="button warning" type="button" data-i18n="continue" disabled>Continue</button><button id="stop" class="button danger" type="button" data-i18n="stop">Stop</button></div>
-
-            <div id="manual-banner" class="manual state-banner hidden" role="alert"><span class="state-icon" aria-hidden="true">!</span><span data-i18n="manual_banner">Waiting for manual action.</span></div>
-            <div id="auto-panel" class="auto-panel state-banner hidden"><span class="state-icon" aria-hidden="true">◷</span><span id="countdown"></span><div class="inline-actions"><button id="run-now" type="button" data-i18n="run_now">Run now</button><button id="cancel-auto" type="button" data-i18n="cancel_auto">Cancel</button></div></div>
-
-            <div class="progress-block"><div class="progress-meta"><span data-i18n="progress">Progress</span><strong id="progress-text">0 / 0 (0%)</strong></div><progress id="progress" max="100" value="0" aria-label="Batch progress">0%</progress></div>
-          </section>
-
           <section id="accounts-card" class="glass card accounts-card">
             <div class="section-title"><div><p class="section-kicker">Profiles</p><h2 data-i18n="accounts">Accounts</h2></div><span class="account-badge"><span class="context-dot"></span><span id="account-count">1</span></span></div>
             <div class="account-fields">
@@ -132,5 +117,28 @@
         </div>
       </main>
     </div>
+
+    <section class="glass batch-dock" aria-labelledby="batch-dock-title">
+      <div class="dock-summary">
+        <div class="dock-identity">
+          <h2 id="batch-dock-title" class="visually-hidden" data-i18n="actions">Actions</h2>
+          <strong id="active-book" class="active-book"></strong>
+          <span id="run-indicator" class="run-indicator"><span></span><span data-i18n="ready">Ready</span></span>
+        </div>
+        <div class="progress-block"><div class="progress-meta"><span data-i18n="progress">Progress</span><strong id="progress-text">0 / 0 (0%)</strong></div><progress id="progress" max="100" value="0" aria-label="Batch progress">0%</progress></div>
+      </div>
+      <div class="dock-actions">
+        <div class="mode-actions">
+          <button data-mode="retry" data-full-label="retry" class="button secondary" type="button"><span class="button-glyph" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10a9 9 0 1 1 2.3 8.1"/><path d="M3 4v6h6"/></svg></span><span data-i18n="retry_short">Retry</span></button>
+          <button data-mode="force" data-full-label="force" class="button secondary" type="button"><span class="button-glyph" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="m13 3-9 11h7l-1 7 10-11h-7l1-7Z"/></svg></span><span data-i18n="force_short">Rerun</span></button>
+          <button data-mode="main" data-full-label="main" class="button primary main-action" type="button"><span class="button-glyph" aria-hidden="true"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.8a.8.8 0 0 1 1.2-.7l10 6.2a.8.8 0 0 1 0 1.4l-10 6.2A.8.8 0 0 1 8 18.2Z"/></svg></span><span data-i18n="main_short">Run</span></button>
+        </div>
+        <div class="intervention-actions"><button id="continue" data-full-label="continue" class="button warning" type="button" disabled><span class="button-glyph" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14m-6-6 6 6-6 6"/></svg></span><span data-i18n="continue_short">Continue</span></button><button id="stop" data-full-label="stop" class="button danger" type="button"><span class="button-glyph" aria-hidden="true"><svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg></span><span data-i18n="stop">Stop</span></button></div>
+      </div>
+      <div class="dock-alerts">
+        <div id="manual-banner" class="manual state-banner hidden" role="alert"><span class="state-icon" aria-hidden="true">!</span><span data-i18n="manual_banner">Waiting for manual action.</span></div>
+        <div id="auto-panel" class="auto-panel state-banner hidden"><span class="state-icon" aria-hidden="true">◷</span><span id="countdown"></span><div class="inline-actions"><button id="run-now" type="button" data-i18n="run_now">Run now</button><button id="cancel-auto" type="button" data-i18n="cancel_auto">Cancel</button></div></div>
+      </div>
+    </section>
   </body>
 </html>

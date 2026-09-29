@@ -99,6 +99,98 @@ class ImageResultTests(unittest.TestCase):
         self.assertEqual(self.worker.get_all_image_srcs(self.page), [old, generated])
         self.assertEqual(self.worker.get_latest_new_image(self.page, [old]), generated)
 
+    def test_current_chatgpt_search_units_exclude_upload_and_find_generated_image(self):
+        upload, generated = image_url(size=(120, 120)), image_url()
+        self.show(f"""
+            <main><div data-content-search-turn-key="fallback-turn-0">
+                <div data-content-search-unit-key="fallback-turn-0:0:user"
+                     data-chatgpt-search-unit-key="fallback-turn-0:0:user">
+                    <img src="{upload}">
+                    <div data-markdown-text-style="user-message" class="MarkdownRoot-rZKhxa">Tạo ảnh</div>
+                </div>
+                <div data-content-search-unit-key="fallback-turn-0:1:assistant"
+                     data-chatgpt-search-unit-key="fallback-turn-0:1:assistant">
+                    <div data-chatgpt-selection-message-id="fixture-assistant">
+                        <div data-markdown-text-style="assistant-message" class="MarkdownRoot-rZKhxa">
+                            <p>Đã tạo ảnh</p>
+                        </div>
+                        <div class="image-tool"><img src="{generated}"></div>
+                    </div>
+                </div>
+            </div></main>
+        """)
+        snapshot = self.worker.get_image_snapshot(self.page)
+        self.assertEqual(self.worker.get_all_image_srcs(self.page), [generated], snapshot)
+        self.assertEqual(snapshot["ignored"].get("user"), 1, snapshot)
+
+    def test_generated_gallery_sibling_in_current_turn_excludes_other_images(self):
+        upload = image_url(size=(120, 120))
+        unmarked = image_url(size=(130, 130))
+        generated = image_url()
+        self.show(f"""
+            <main><div data-content-search-turn-key="fallback-turn-2">
+                <div data-content-search-unit-key="fallback-turn-2:0:user"
+                     data-chatgpt-search-unit-key="fallback-turn-2:0:user">
+                    <img src="{upload}"><p>Tạo ảnh với bản dịch</p>
+                </div>
+                <div data-chatgpt-search-message-ids="fixture-tool-message">
+                    <div><div data-testid="generated-image-gallery">
+                        <div><div class="group/generated-image-preview">
+                            <button data-testid="generated-image-preview"
+                                    aria-label="Generated image 1" aria-hidden="false">
+                                <img width="320" height="240" src="{generated}">
+                            </button>
+                        </div></div>
+                    </div></div>
+                </div>
+                <div><img src="{unmarked}"></div>
+            </div></main>
+        """)
+        snapshot = self.worker.get_image_snapshot(self.page)
+        self.assertEqual([item["src"] for item in snapshot["images"]], [generated], snapshot)
+        self.assertTrue(snapshot["images"][0]["ready"], snapshot)
+        self.assertEqual(snapshot["ignored"].get("user"), 1, snapshot)
+        self.assertEqual(snapshot["ignored"].get("outside_response"), 1, snapshot)
+
+    def test_generated_gallery_requires_conversation_and_excludes_user_and_composer(self):
+        generated = image_url()
+        gallery = f"""<div data-testid="generated-image-gallery">
+            <button data-testid="generated-image-preview" aria-label="Generated image 1">
+                <img src="{generated}">
+            </button>
+        </div>"""
+        for name, markup in (
+            ("outside_conversation", f"<main>{gallery}</main>"),
+            ("user_upload", '<main><div data-content-search-turn-key="fallback-turn-2">'
+             '<div data-content-search-unit-key="fallback-turn-2:0:user">' + gallery + '</div></div></main>'),
+            ("composer", '<main><div data-content-search-turn-key="fallback-turn-2">'
+             '<form><div id="prompt-textarea" contenteditable="true"></div>' + gallery + '</form></div></main>'),
+        ):
+            with self.subTest(context=name):
+                self.show(markup)
+                self.assertEqual(self.worker.get_all_image_srcs(self.page, include_pending=True), [])
+
+    def test_pending_generated_gallery_image_is_not_new_when_it_becomes_ready(self):
+        generated = image_url()
+        self.show(f"""
+            <main><div data-content-search-turn-key="fallback-turn-2">
+                <div data-content-search-unit-key="fallback-turn-2:0:user">Tạo ảnh với bản dịch</div>
+                <div data-chatgpt-search-message-ids="fixture-tool-message">
+                    <div data-testid="generated-image-gallery">
+                        <button data-testid="generated-image-preview" aria-label="Generated image 1">
+                            <img id="generated" style="display:none" src="{generated}">
+                        </button>
+                    </div>
+                </div>
+            </div></main>
+        """)
+        self.assertEqual(self.worker.get_all_image_srcs(self.page), [])
+        baseline = self.worker.get_all_image_srcs(self.page, include_pending=True)
+        self.assertEqual(baseline, [generated])
+        self.page.locator("#generated").evaluate("img => img.style.display = 'block'")
+        self.assertEqual(self.worker.get_all_image_srcs(self.page), [generated])
+        self.assertIsNone(self.worker.get_latest_new_image(self.page, baseline))
+
     def test_tool_only_conversation_turn_and_gemini_response(self):
         for wrapper in (
             '<article data-testid="conversation-turn-7">{}</article>',

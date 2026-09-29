@@ -1489,59 +1489,102 @@ def send_prompt(page, text, max_send_attempts=4):
     raise Exception(f"Không gửi được prompt sau {max_send_attempts} lần: {last_error}")
 
 
-def get_assistant_response_signature(page):
-    try:
-        return page.evaluate("""
-            () => {
-                const isUserNode = (node) => Boolean(node.closest(
-                    '[data-message-author-role="user"], [data-testid*="user" i], ' +
-                    'user-query, .user-query, .user-message'
-                ));
-                let nodes = Array.from(document.querySelectorAll(
-                    '[data-message-author-role="assistant"], [data-testid*="assistant" i], ' +
-                    'message-content, .message-content, .model-response-text, ' +
+USER_MESSAGE_SELECTOR = (
+    '[data-message-author-role="user"], [data-turn="user"], '
+    '[data-testid*="user" i], user-query, .user-query, .user-message, '
+    '[data-chatgpt-search-unit-key$=":user"], [data-content-search-unit-key$=":user"]'
+)
+ASSISTANT_MESSAGE_SELECTOR = (
+    '[data-message-author-role="assistant"], [data-turn="assistant"], '
+    '[data-testid*="assistant" i], model-response, message-content, '
+    '.message-content, .model-response-text, '
+    '[data-chatgpt-search-unit-key$=":assistant"], '
+    '[data-content-search-unit-key$=":assistant"], '
+    '[data-markdown-text-style="assistant-message"]'
+)
+
+
+def get_assistant_response_snapshot(page):
+    """Read response content, keeping controls and empty wrappers out of the count."""
+    return page.evaluate(r"""
+            ({userSelector, assistantSelector}) => {
+                const ignoredSelector = userSelector + ', #prompt-textarea, textarea, ' +
+                    '[contenteditable="true"], .input-area-container, rich-textarea, ' +
+                    'button, [role="button"], [role="toolbar"], svg, script, style, ' +
+                    '[hidden], [aria-hidden="true"], .sr-only, nav, aside';
+                const visible = (node) => {
+                    const rect = node.getBoundingClientRect();
+                    const style = window.getComputedStyle(node);
+                    return rect.width > 0 && rect.height > 0 &&
+                        style.visibility !== 'hidden' && style.display !== 'none';
+                };
+                const readText = (node) => {
+                    if (node.closest(ignoredSelector) || !visible(node)) return '';
+                    const parts = [];
+                    const walker = document.createTreeWalker(node, NodeFilter.SHOW_TEXT);
+                    let textNode;
+                    while ((textNode = walker.nextNode())) {
+                        const parent = textNode.parentElement;
+                        if (parent && !parent.closest(ignoredSelector) && visible(parent)) {
+                            parts.push(textNode.nodeValue);
+                        }
+                    }
+                    return parts.join(' ').replace(/\s+/g, ' ').trim();
+                };
+
+                // Include markdown even when an old/empty turn already matched.
+                // Assistant-named action buttons must never replace the answer.
+                // The current ChatGPT browser UI uses role-specific search units.
+                // Its search-turn wrapper contains BOTH user and assistant content.
+                const candidates = Array.from(document.querySelectorAll(
+                    assistantSelector + ', .markdown, ' +
                     '[data-testid^="conversation-turn-"]'
-                )).filter((node) => !isUserNode(node) && !node.querySelector(
-                    '[data-message-author-role="user"], [data-testid*="user" i], user-query, .user-query, .user-message'
                 ));
+                let entries = candidates.filter((node) => !node.querySelector(userSelector))
+                    .map((node) => ({node, text: readText(node)}))
+                    .filter((entry) => entry.text.length > 0);
 
-                if (nodes.length === 0) {
-                    nodes = Array.from(document.querySelectorAll('.markdown, .message-content')).filter((node) => {
-                        const text = (node.innerText || node.textContent || '').trim();
-                        return text.length > 0 && !isUserNode(node) &&
-                            !node.closest('#prompt-textarea') &&
-                            !node.closest('.input-area-container') &&
-                            !node.closest('rich-textarea');
-                    });
-                }
-
-                // A response wrapper and its message-content child can both match.
-                // Keep the deepest matching node so one response is counted once.
-                nodes = nodes.filter((node) => !nodes.some(
-                    (other) => other !== node && node.contains(other)
+                // Keep the outer content-bearing response so tool cards and
+                // sibling paragraphs are retained and each turn is counted once.
+                entries = entries.filter((entry) => !entries.some(
+                    (other) => other !== entry && other.node.contains(entry.node)
                 ));
-
-                const texts = nodes
-                    .map((node) => (node.innerText || node.textContent || '').trim())
-                    .filter((text) => text.length > 0);
-                const last = texts.length ? texts[texts.length - 1] : '';
+                const notices = Array.from(document.querySelectorAll(
+                    '[role="alert"], [aria-live], [data-testid*="toast" i], [data-testid*="status" i]'
+                )).map(readText).filter((text) => text.length > 0);
 
                 return {
-                    count: texts.length,
-                    last_len: last.length,
-                    last_tail: last.slice(-500)
+                    assistant: entries.map((entry) => entry.text),
+                    notices,
+                    diagnostics: {candidates: candidates.length, responses: entries.length}
                 };
             }
-        """)
-    except Exception:
-        return {"count": 0, "last_len": 0, "last_tail": ""}
+        """, {"userSelector": USER_MESSAGE_SELECTOR, "assistantSelector": ASSISTANT_MESSAGE_SELECTOR})
 
 
-def has_new_assistant_response(page, before_signature):
-    if not before_signature:
+def get_assistant_response_signature(page):
+    try:
+        snapshot = get_assistant_response_snapshot(page)
+        texts = snapshot["assistant"]
+        last = texts[-1] if texts else ""
+        return {
+            "count": len(texts), "last_len": len(last), "last_tail": last[-500:],
+            "diagnostics": snapshot.get("diagnostics", {}),
+        }
+    except Exception as exc:
+        return {
+            "count": 0, "last_len": 0, "last_tail": "",
+            "error": f"{type(exc).__name__}: {str(exc).splitlines()[0] if str(exc) else 'DOM read failed'}"[:500],
+        }
+
+
+def has_new_assistant_response(page, before_signature, current_signature=None):
+    if not before_signature or before_signature.get("error"):
         return False
 
-    current = get_assistant_response_signature(page)
+    current = current_signature if current_signature is not None else get_assistant_response_signature(page)
+    if current.get("error"):
+        return False
     before_count = int(before_signature.get("count") or 0)
     before_len = int(before_signature.get("last_len") or 0)
     before_tail = before_signature.get("last_tail") or ""
@@ -1584,43 +1627,13 @@ def find_image_quota_marker(text):
 def get_generation_notice_texts(page, before_signature=None):
     """Read assistant/current notice text, excluding the composer and user turns."""
     try:
-        snapshot = page.evaluate("""
-            () => {
-                const userSelector = '[data-message-author-role="user"], [data-turn="user"], ' +
-                    '[data-testid*="user" i], user-query, .user-query, .user-message';
-                const assistantSelector = '[data-message-author-role="assistant"], [data-turn="assistant"], ' +
-                    '[data-testid*="assistant" i], model-response, message-content, ' +
-                    '.message-content, .model-response-text, [data-testid^="conversation-turn-"]';
-                const visible = (node) => {
-                    const rect = node.getBoundingClientRect();
-                    const style = window.getComputedStyle(node);
-                    return rect.width > 0 && rect.height > 0 &&
-                        style.visibility !== 'hidden' && style.display !== 'none';
-                };
-                const isUser = (node) => Boolean(node.closest(userSelector));
-                let assistant = Array.from(document.querySelectorAll(assistantSelector))
-                    .filter((node) => !isUser(node) && !node.querySelector(userSelector) && visible(node));
-                assistant = assistant.filter((node) => !assistant.some(
-                    (other) => other !== node && node.contains(other)
-                ));
-
-                const notices = Array.from(document.querySelectorAll(
-                    '[role="alert"], [aria-live], [data-testid*="toast" i], [data-testid*="status" i]'
-                )).filter((node) => !isUser(node) && visible(node));
-
-                return {
-                    assistant: assistant.map((node) => (node.innerText || node.textContent || '').trim()),
-                    notices: notices.map((node) => (node.innerText || node.textContent || '').trim())
-                };
-            }
-        """)
+        snapshot = get_assistant_response_snapshot(page)
         assistant_texts = [text for text in snapshot.get("assistant", []) if str(text).strip()]
         if before_signature is not None:
             before_count = int(before_signature.get("count") or 0)
             if len(assistant_texts) > before_count:
-                # A single assistant turn may contain a tool card, markdown,
-                # and a follow-up paragraph as separate nodes.  Inspect all
-                # nodes added after the baseline, not just the final one.
+                # Inspect all responses added after the baseline, including
+                # tool notices followed by a separate assistant message.
                 assistant_texts = assistant_texts[before_count:]
             elif assistant_texts:
                 assistant_texts = assistant_texts[-1:]
@@ -1648,6 +1661,23 @@ def get_generation_quota_evidence(page, before_signature=None):
     return None
 
 
+def log_response_wait_diagnostics(before_signature, current_signature):
+    """Log structural counts/errors only, never the conversation text."""
+    before = before_signature or {}
+    current = current_signature or {}
+    detail = (
+        f"before={int(before.get('count') or 0)}/{int(before.get('last_len') or 0)} "
+        f"current={int(current.get('count') or 0)}/{int(current.get('last_len') or 0)}"
+    )
+    diagnostics = current.get("diagnostics")
+    if diagnostics:
+        detail += " " + json.dumps(diagnostics, ensure_ascii=False, separators=(",", ":"))
+    for label, signature in (("before_error", before), ("current_error", current)):
+        if signature.get("error"):
+            detail += f" {label}={signature['error']}"
+    print(f"  ↳ Nhận diện phản hồi: {detail}")
+
+
 def wait_assistant_response_stable(page, before_signature, stable_seconds=6, timeout=900):
     start = time.time()
     last_signature = None
@@ -1658,7 +1688,8 @@ def wait_assistant_response_stable(page, before_signature, stable_seconds=6, tim
         wait_if_cloudflare(page)
 
         generating = is_generating(page)
-        has_new = has_new_assistant_response(page, before_signature)
+        current = get_assistant_response_signature(page)
+        has_new = has_new_assistant_response(page, before_signature, current_signature=current)
 
         if generating:
             stable_start = None
@@ -1671,14 +1702,16 @@ def wait_assistant_response_stable(page, before_signature, stable_seconds=6, tim
             continue
 
         if not has_new:
+            stable_start = None
+            last_signature = None
             if time.time() - last_log >= 30:
                 elapsed = int(time.time() - start)
                 print(f"  ⏳ Chờ phản hồi mới xuất hiện... ({elapsed}s)")
+                log_response_wait_diagnostics(before_signature, current)
                 last_log = time.time()
             sleep(2)
             continue
 
-        current = get_assistant_response_signature(page)
         comparable = (
             int(current.get("count") or 0),
             int(current.get("last_len") or 0),
@@ -1686,7 +1719,7 @@ def wait_assistant_response_stable(page, before_signature, stable_seconds=6, tim
         )
 
         if comparable == last_signature:
-            if stable_start and time.time() - stable_start >= stable_seconds:
+            if stable_start is not None and time.time() - stable_start >= stable_seconds:
                 print("  ✓ Phản hồi ChatGPT đã hoàn tất và ổn định")
                 return True
         else:
@@ -1743,6 +1776,7 @@ def wait_response_after_send(page, timeout_start=90, timeout_done=900, resend_te
 
     if not started:
         print("⚠ Không nhận được phản hồi mới; không coi bước này là thành công.")
+        log_response_wait_diagnostics(before_signature, get_assistant_response_signature(page))
         return False
 
     print("⏳ Chờ ChatGPT xử lý xong...")
@@ -1762,7 +1796,7 @@ def get_image_snapshot(page):
     """Inspect image results, including tool cards outside the assistant text node."""
     try:
         return page.evaluate("""
-            () => {
+            ({userSelector, assistantSelector}) => {
                 const prompt = document.querySelector('#prompt-textarea') || 
                                document.querySelector('.ql-editor[contenteditable="true"]') ||
                                document.querySelector('rich-textarea div[contenteditable="true"]') ||
@@ -1772,12 +1806,6 @@ def get_image_snapshot(page):
                 const result = [];
                 const ignored = {};
                 const skip = (reason) => { ignored[reason] = (ignored[reason] || 0) + 1; };
-                const userSelector = '[data-message-author-role="user"], [data-turn="user"], ' +
-                    '[data-testid*="user" i], user-query, .user-query, .user-message';
-                const assistantSelector = '[data-message-author-role="assistant"], [data-turn="assistant"], ' +
-                    '[data-testid*="assistant" i], model-response, message-content, ' +
-                    '.message-content, .model-response-text';
-
                 for (const img of Array.from(document.querySelectorAll('img'))) {
                     if (composer && composer.contains(img)) { skip('composer'); continue; }
                     if (img.closest(userSelector)) { skip('user'); continue; }
@@ -1787,7 +1815,14 @@ def get_image_snapshot(page):
                     // whole page (which also contains uploads, avatars and history).
                     const turn = img.closest('[data-testid^="conversation-turn-"]');
                     if (turn && turn.querySelector(userSelector)) { skip('user'); continue; }
-                    const message = img.closest(assistantSelector) || turn;
+                    // The newer ChatGPT UI puts generated galleries outside every
+                    // assistant search unit. Its search turn also contains the user
+                    // prompt, so only accept marked image tools within that turn.
+                    const generatedTool = img.closest(
+                        '[data-testid="generated-image-preview"], [data-testid="generated-image-gallery"]'
+                    );
+                    const generatedTurn = generatedTool && img.closest('[data-content-search-turn-key]');
+                    const message = img.closest(assistantSelector) || turn || generatedTurn;
                     if (!message) { skip('outside_response'); continue; }
 
                     const src = img.currentSrc || img.getAttribute('src') || '';
@@ -1815,7 +1850,7 @@ def get_image_snapshot(page):
 
                 return {images: result, ignored};
             }
-        """)
+        """, {"userSelector": USER_MESSAGE_SELECTOR, "assistantSelector": ASSISTANT_MESSAGE_SELECTOR})
     except Exception as exc:
         return {"images": [], "ignored": {}, "error": str(exc).splitlines()[0]}
 

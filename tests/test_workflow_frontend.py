@@ -76,6 +76,85 @@ class WorkflowFrontendTests(unittest.TestCase):
         self.page.close()
         self.assertEqual(self.errors, [])
 
+    def test_streaming_logs_preserve_selection_scroll_and_other_ui(self):
+        page = self.page
+        page.evaluate(r"""() => {
+          emitWorkflow('book-1', 'process_started');
+          emitWorkflow('book-1', 'log_appended', {text:'selected log line\n'.repeat(200)});
+          const log = document.querySelector('#log');
+          log.scrollTop = 100;
+          window.originalLogScroll = log.scrollTop;
+          window.originalLogNode = log.firstChild;
+          const range = document.createRange();
+          range.setStart(log.firstChild, 0);
+          range.setEnd(log.firstChild, 8);
+          getSelection().removeAllRanges();
+          getSelection().addRange(range);
+          window.uiChanges = [];
+          window.uiObserver = new MutationObserver(changes => {
+            uiChanges.push(...changes.filter(change => !log.contains(change.target)));
+          });
+          uiObserver.observe(document.body, {subtree:true,childList:true,characterData:true,attributes:true});
+        }""")
+        page.evaluate(r"""async () => {
+          for (let index = 0; index < 12; index++) {
+            emitWorkflow('book-1', 'log_appended', {text:`new line ${index}\n`});
+            emitWorkflow('book-2', 'log_appended', {text:`background ${index}\n`});
+            await new Promise(requestAnimationFrame);
+          }
+        }""")
+        self.assertEqual(page.evaluate("getSelection().toString()"), "selected")
+        self.assertTrue(page.evaluate("document.querySelector('#log').firstChild === originalLogNode"))
+        self.assertEqual(page.evaluate("document.querySelector('#log').scrollTop"), page.evaluate("originalLogScroll"))
+        self.assertEqual(page.evaluate("uiChanges.length"), 0)
+        self.assertIn("new line 11", page.locator("#log").text_content())
+        self.assertNotIn("background", page.locator("#log").text_content())
+        page.evaluate("uiObserver.disconnect(); getSelection().removeAllRanges();")
+        page.evaluate(r"""() => {
+          const log = document.querySelector('#log');
+          log.scrollTop = log.scrollHeight;
+          emitWorkflow('book-1', 'log_appended', {text:'follow the tail\n'.repeat(20)});
+        }""")
+        self.assertTrue(page.evaluate("(() => { const log = document.querySelector('#log'); return log.scrollHeight - log.clientHeight - log.scrollTop < 2; })()"))
+        page.locator('#tab-book-2').click()
+        self.assertIn('background 11', page.locator('#log').text_content())
+        self.assertNotIn('new line', page.locator('#log').text_content())
+        page.evaluate("emitWorkflow('book-2', 'log_cleared'); emitWorkflow('book-2', 'log_appended', {text:'after clear'});")
+        self.assertEqual(page.locator('#log').text_content(), 'after clear')
+
+    def test_progress_updates_keep_unchanged_labels_and_focus(self):
+        page = self.page
+        page.evaluate("emitWorkflow('book-1', 'process_started');")
+        page.locator('#tab-book-1').focus()
+        page.evaluate("""() => {
+          window.stableLabels = ['#active-book', '#run-indicator span:last-child',
+            '#tab-book-1 strong', '#tab-book-2 small', '.context-service', '.context-caption']
+            .map(selector => { const node = document.querySelector(selector); return [node, node.firstChild]; });
+          for (let done = 1; done <= 10; done++) {
+            emitWorkflow('book-1', 'progress_changed', {done,total:10});
+          }
+        }""")
+        self.assertTrue(page.evaluate("stableLabels.every(([node, child]) => node.firstChild === child)"))
+        self.assertEqual(page.evaluate('document.activeElement.id'), 'tab-book-1')
+        self.assertIn('10 / 10 (100%)', page.locator('#progress-text').text_content())
+        self.assertIn('10/10', page.locator('#tab-book-1').text_content())
+
+    def test_snapshot_ahead_of_log_events_does_not_drop_or_duplicate_output(self):
+        page = self.page
+        page.evaluate("""() => {
+          emitWorkflow('book-1', 'log_cleared');
+          emitWorkflow('book-1', 'log_appended', {text:'before snapshot;'});
+          window.originalLogNode = document.querySelector('#log').firstChild;
+          acceptSnapshot(state, {...state.controller, sequence:state.sequence + 1,
+            log_history:state.controller.log_history + 'snapshot output;'});
+          emitWorkflow('book-1', 'log_appended', {text:'snapshot output;'});
+          emitWorkflow('book-1', 'log_appended', {text:'next output;'});
+        }""")
+        self.assertEqual(page.locator('#log').text_content(), 'before snapshot;snapshot output;next output;')
+        self.assertTrue(page.evaluate("document.querySelector('#log').firstChild === originalLogNode"))
+        page.evaluate("acceptSnapshot(state, {...state.controller, sequence:state.sequence + 1, log_history:''});")
+        self.assertEqual(page.locator('#log').text_content(), '')
+
     def test_sidebar_shows_both_books_and_background_account_switch(self):
         page = self.page
         page.evaluate("""() => {

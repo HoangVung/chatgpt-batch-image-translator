@@ -11,6 +11,10 @@ const pendingMessages = [];
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector)];
 
+function setText(node, text) {
+  if (node.textContent !== text) node.textContent = text;
+}
+
 async function api(method, ...args) {
   const fn = window.pywebview?.api?.[method];
   if (!fn) throw new Error("pywebview API is not ready");
@@ -62,10 +66,10 @@ function renderServiceContexts() {
     const account = (settings.chatgpt_accounts || []).find(item => item.id === settings.active_chatgpt_account_id);
     const serviceName = settings.service === "gemini" ? "Google Gemini" : "ChatGPT";
     const accountName = settings.service === "gemini" ? "Google Gemini" : account?.name || "—";
-    row.querySelector(".context-book").textContent = t("book_tab", {number: id.split("-").at(-1)});
+    setText(row.querySelector(".context-book"), t("book_tab", {number: id.split("-").at(-1)}));
     row.querySelector(".context-book").hidden = !multiSession;
-    row.querySelector(".context-service").textContent = serviceName;
-    row.querySelector(".context-caption").textContent = accountName;
+    setText(row.querySelector(".context-service"), serviceName);
+    setText(row.querySelector(".context-caption"), accountName);
     row.querySelector(".context-caption").title = accountName;
     row.dataset.active = String(target === state);
   });
@@ -101,11 +105,11 @@ function renderTabs() {
     const attention = !!target.error || c.manual_action_required || ["error_detail", "waiting_quota_outcome", "needs_retry_outcome"].includes(c.status?.key);
     const label = t("book_tab", {number: id.split("-").at(-1)});
     const status = attention ? t("tab_attention") : c.running ? `${t("status_running")} ${c.progress_done || 0}/${c.progress_total || 0}` : c.auto_next_active ? t("tab_waiting") : t("ready");
-    button.firstElementChild.textContent = label;
+    setText(button.firstElementChild, label);
     const folder = c.folder_progress || {};
     const folderStatus = t("tab_folder_progress", {done: folder.done ?? "—", total: folder.total ?? "—"});
-    button.children[1].textContent = status;
-    button.lastElementChild.textContent = folderStatus;
+    setText(button.children[1], status);
+    setText(button.lastElementChild, folderStatus);
     button.title = `${label}: ${status}\n${folderStatus}\n${target.settings.image_folder || ""}`;
     button.setAttribute("aria-selected", String(target === state));
     button.tabIndex = target === state ? 0 : -1;
@@ -116,12 +120,10 @@ function renderTabs() {
 
 function renderSession() {
   renderSettings();
-  renderController();
-  $("#log").textContent = state.controller.log_history || "";
+  setText($("#log"), state.controller.log_history || "");
   $("#log").scrollTop = state.logScroll ?? $("#log").scrollHeight;
   setNoticeText(state.error || "");
   $("#notice").classList.toggle("hidden", !state.error);
-  renderTabs();
 }
 
 function switchSession(id) {
@@ -133,8 +135,28 @@ function switchSession(id) {
 
 function acceptSnapshot(target, snapshot) {
   if (!snapshot || (snapshot.sequence || 0) < target.sequence) return;
+  const previousLog = target.controller.log_history || "";
   target.controller = {...snapshot};
   target.sequence = snapshot.sequence || 0;
+  const nextLog = target.controller.log_history || "";
+  if (nextLog !== previousLog) {
+    const appended = nextLog.startsWith(previousLog);
+    updateLog(target, appended ? nextLog.slice(previousLog.length) : nextLog, !appended);
+  }
+}
+
+function updateLog(target, text, clear = false) {
+  if (target !== state) {
+    if (clear) target.logScroll = 0;
+    return;
+  }
+  const log = $("#log");
+  const followTail = log.scrollHeight - log.clientHeight - log.scrollTop <= 2;
+  // Keep existing text nodes (and selections) intact as worker output arrives.
+  if (clear) log.replaceChildren();
+  if (text) log.append(document.createTextNode(text));
+  if (clear || followTail) log.scrollTop = log.scrollHeight;
+  target.logScroll = log.scrollTop;
 }
 
 async function refreshSession(target) {
@@ -162,8 +184,8 @@ function t(key, params = {}) {
 function setNoticeText(text) {
   const notice = $("#notice");
   const copy = notice.querySelector(".notice-copy");
-  if (copy) copy.textContent = text;
-  else notice.textContent = text;
+  if (copy) setText(copy, text);
+  else setText(notice, text);
 }
 
 function showError(error, target = state) {
@@ -196,7 +218,11 @@ function updatePathPresentation() {
 function renderText() {
   document.documentElement.lang = state.language;
   $$('[data-i18n]').forEach((node) => {
-    node.textContent = t(node.dataset.i18n);
+    setText(node, t(node.dataset.i18n));
+  });
+  $$('.batch-dock [data-full-label]').forEach((button) => {
+    button.title = t(button.dataset.fullLabel);
+    button.setAttribute("aria-label", button.title);
   });
   $$('[data-placeholder]').forEach((node) => {
     node.placeholder = t(node.dataset.placeholder);
@@ -275,7 +301,7 @@ async function save(showSavedStatus = false, target = state) {
 function renderStatus() {
   const status = state.controller.status || {key: "ready", params: {}};
   const copy = $("#status .status-copy");
-  if (copy) copy.textContent = t(status.key, status.params);
+  if (copy) setText(copy, t(status.key, status.params));
 }
 
 function renderController() {
@@ -287,10 +313,11 @@ function renderController() {
   const launchPending = !!state.launchPending;
   const manual = !!controller.manual_action_required;
   const autoNext = !!controller.auto_next_active;
+  setText($("#active-book"), t("book_tab", {number: state.id?.split("-").at(-1) || 1}));
   $("#auto-panel").classList.toggle("hidden", !autoNext);
   const remaining = state.remaining || 0;
   const time = `${String(Math.floor(remaining / 60)).padStart(2, "0")}:${String(remaining % 60).padStart(2, "0")}`;
-  $("#countdown").textContent = controller.status?.key === "auto_countdown" ? t("auto_countdown", controller.status.params) : t("auto_countdown", {time});
+  setText($("#countdown"), controller.status?.key === "auto_countdown" ? t("auto_countdown", controller.status.params) : t("auto_countdown", {time}));
   $("#confirm-output").disabled = running || autoNext || launchPending;
   $$('#configuration-card input, #configuration-card select, #configuration-card button').forEach((node) => { node.disabled = running || launchPending; });
   $("#confirm-output").disabled = running || autoNext || launchPending;
@@ -298,7 +325,7 @@ function renderController() {
   document.body.classList.toggle("is-running", running);
   $("#progress").value = percent;
   $("#progress").setAttribute("aria-valuetext", `${done} / ${total} (${Math.round(percent)}%)`);
-  $("#progress-text").textContent = `${done} / ${total} (${Math.round(percent)}%)`;
+  setText($("#progress-text"), `${done} / ${total} (${Math.round(percent)}%)`);
   $("#manual-banner").classList.toggle("hidden", !manual);
   $("#continue").disabled = !manual;
   $("#stop").disabled = !running && !autoNext;
@@ -308,8 +335,9 @@ function renderController() {
   });
 
   const runCopy = $("#run-indicator span:last-child");
-  runCopy.textContent = running ? t("status_running") : t("ready");
+  setText(runCopy, manual ? t("tab_attention") : running ? t("status_running") : autoNext ? t("tab_waiting") : t(controller.status?.key || "ready", controller.status?.params));
   $("#run-indicator").classList.toggle("active", running);
+  $("#run-indicator").title = t(controller.status?.key || "ready", controller.status?.params);
   const statusEl = $("#status");
   if (statusEl) statusEl.dataset.state = manual ? "warning" : running ? "running" : "idle";
   renderStatus();
@@ -331,10 +359,14 @@ window.batchTranslatorReceive = (message) => {
   target.controller.sequence = message.sequence;
   if (message.run_id) target.controller.run_id = message.run_id;
   const payload = message.payload || {};
-  if (message.type === "log_appended") {
-    target.controller.log_history = (target.controller.log_history || "") + (payload.text || "");
+  if (message.type === "log_appended" || message.type === "log_cleared") {
+    const clear = message.type === "log_cleared";
+    const text = clear ? "" : payload.text || "";
+    target.controller.log_history = clear ? "" : (target.controller.log_history || "") + text;
+    updateLog(target, text, clear);
+    // Logs do not change controls, tabs, accounts, or progress.
+    return;
   }
-  if (message.type === "log_cleared") target.controller.log_history = "";
   if (message.type === "progress_changed") {
     target.controller.progress_done = payload.done;
     target.controller.progress_total = payload.total;
@@ -377,13 +409,8 @@ window.batchTranslatorReceive = (message) => {
     showError(payload.error || message.type, target);
   }
   if (target === state) {
-    if (["log_appended", "log_cleared"].includes(message.type)) {
-      $("#log").textContent = target.controller.log_history;
-      $("#log").scrollTop = $("#log").scrollHeight;
-    }
     renderController();
-  }
-  renderTabs();
+  } else renderTabs();
 };
 
 async function initialize() {
@@ -525,12 +552,27 @@ function bind() {
   });
   // Keep navigation and keyboard focus below the pinned header as text wraps.
   const workspaceHeader = $(".workspace-header");
+  const updateDockPosition = () => {
+    const bounds = workspaceHeader.getBoundingClientRect();
+    document.documentElement.style.setProperty("--batch-dock-center-x", `${bounds.left + bounds.width / 2}px`);
+    document.documentElement.style.setProperty("--batch-dock-available-width", `${Math.max(0, bounds.width - 24)}px`);
+  };
   const headerObserver = new ResizeObserver(() => {
     const offset = workspaceHeader.getBoundingClientRect().height + $(".titlebar").getBoundingClientRect().height + 12;
     document.documentElement.style.setProperty("--workspace-scroll-offset", `${offset}px`);
+    updateDockPosition();
   });
   headerObserver.observe(workspaceHeader);
   headerObserver.observe($(".titlebar"));
+  window.addEventListener("resize", updateDockPosition);
+  updateDockPosition();
+  const batchDock = $(".batch-dock");
+  const updateDockHeight = () => {
+    document.documentElement.style.setProperty("--batch-dock-height", `${Math.ceil(batchDock.getBoundingClientRect().height)}px`);
+  };
+  const dockObserver = new ResizeObserver(updateDockHeight);
+  dockObserver.observe(batchDock, {box: "border-box"});
+  updateDockHeight();
   $$('[data-scroll-target]').forEach((button) => button.addEventListener("click", () => {
     const target = document.getElementById(button.dataset.scrollTarget);
     if (target) target.scrollIntoView({behavior: "smooth", block: "start"});
