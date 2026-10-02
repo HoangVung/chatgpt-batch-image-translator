@@ -82,8 +82,10 @@ function renderTabs() {
     const folder = c.folder_progress || {};
     const folderStatus = t("tab_folder_progress", {done: folder.done ?? "—", total: folder.total ?? "—"});
     const settings = {...target.settings, ...target.draft};
-    const account = (settings.chatgpt_accounts || []).find(item => item.id === settings.active_chatgpt_account_id);
-    const accountLabel = settings.service === "gemini" ? "Google Gemini" : t("tab_account", {name: account?.name || "—"});
+    const service = settings.service;
+    const account = (settings[`${service}_accounts`] || []).find(item => item.id === settings[`active_${service}_account_id`]);
+    const accountName = account?.name || (service === "gemini" ? "Gemini 1" : "—");
+    const accountLabel = service === "gemini" ? `Google Gemini: ${accountName}` : t("tab_account", {name: accountName});
     setText(button.querySelector(".workflow-status"), status);
     setText(button.querySelector(".workflow-folder-progress"), folderStatus);
     const accountLine = button.querySelector(".workflow-account");
@@ -229,7 +231,6 @@ function renderSettings() {
   $("#theme").value = settings.theme;
   state.language = settings.language;
   setTheme(settings.theme);
-  $("#accounts-card").classList.toggle("hidden", settings.service !== "chatgpt");
   renderAccounts();
   if (state.accountNameDraft !== undefined) $("#account-name").value = state.accountNameDraft;
   updatePathPresentation();
@@ -237,14 +238,17 @@ function renderSettings() {
 }
 
 function renderAccounts() {
-  const accounts = state.settings.chatgpt_accounts || [];
+  const service = state.draft?.service || state.settings.service;
+  const accounts = state.settings[`${service}_accounts`] || [];
+  $("#account-label").dataset.i18n = service === "gemini" ? "account_gemini" : "account";
+  setText($("#account-label"), t($("#account-label").dataset.i18n));
   const select = $("#account-select");
   select.replaceChildren();
   accounts.forEach((account) => {
     const option = document.createElement("option");
     option.value = account.id;
     option.textContent = account.name;
-    option.selected = account.id === state.settings.active_chatgpt_account_id;
+    option.selected = account.id === state.settings[`active_${service}_account_id`];
     select.append(option);
   });
   const active = accounts.find((item) => item.id === select.value);
@@ -304,6 +308,7 @@ function renderController() {
   $$('#configuration-card input, #configuration-card select, #configuration-card button').forEach((node) => {
     setProperty(node, "disabled", running || launchPending || (node.id === "confirm-output" && autoNext));
   });
+  setProperty($("#fallback"), "disabled", running || launchPending || (state.draft?.service || state.settings.service) === "gemini");
 
   document.body.classList.toggle("is-running", running);
   setProperty($("#progress"), "value", percent);
@@ -507,14 +512,12 @@ function bind() {
   });
   $("#service").addEventListener("change", () => {
     const service = $("#service").value;
-    if (service === "chatgpt") {
-      const active = state.settings.chatgpt_accounts.find((item) => item.id === state.settings.active_chatgpt_account_id);
-      if (active) $("#profile-folder").value = active.profile_dir;
-    } else {
-      $("#profile-folder").value = state.settings.gemini_profile_dir;
-    }
-    $("#accounts-card").classList.toggle("hidden", service !== "chatgpt");
+    const active = (state.settings[`${service}_accounts`] || []).find((item) => item.id === state.settings[`active_${service}_account_id`]);
+    $("#profile-folder").value = active?.profile_dir || state.settings.gemini_profile_dir;
     captureDraft();
+    delete state.accountNameDraft;
+    renderAccounts();
+    renderController();
     updatePathPresentation();
   });
   $("#account-select").addEventListener("change", (event) => accountAction("select_account", event.target.value));
@@ -526,9 +529,11 @@ function bind() {
   $("#account-login").addEventListener("click", async () => {
     const target = state;
     const accountId = $("#account-select").value;
+    captureDraft(target);
     target.launchPending = true;
     renderController();
     try {
+      await ensureAccountService(target);
       const data = await sessionApi(target, "login_account", accountId);
       acceptSnapshot(target, data.state);
     } catch (error) { showError(error, target); }
@@ -550,18 +555,29 @@ function bind() {
   });
 }
 
+async function ensureAccountService(target) {
+  const service = target.draft?.service || target.settings.service;
+  if (service !== target.settings.service) {
+    const data = await sessionApi(target, "save_settings", {service});
+    target.settings = data.settings;
+  }
+  return service;
+}
+
 async function accountAction(method, id, name) {
   const target = state;
   captureDraft(target);
   target.launchPending = true;
   renderController();
   try {
+    const service = await ensureAccountService(target);
     const args = method === "add_account" ? [name] : method === "rename_account" ? [id, name] : [id];
     const data = await sessionApi(target, method, ...args);
-    target.settings.chatgpt_accounts = data.accounts;
-    target.settings.active_chatgpt_account_id = data.active_id;
+    target.settings[`${service}_accounts`] = data.accounts;
+    target.settings[`active_${service}_account_id`] = data.active_id;
     const account = data.accounts.find((item) => item.id === data.active_id);
     target.settings.profile_dir = account.profile_dir;
+    if (service === "gemini") target.settings.gemini_profile_dir = account.profile_dir;
     if (target.draft) target.draft.profile_dir = account.profile_dir;
     delete target.accountNameDraft;
     if (target === state) renderSettings();
