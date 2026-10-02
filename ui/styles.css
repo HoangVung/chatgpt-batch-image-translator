@@ -370,17 +370,10 @@ select {
 }
 
 .workspace-header {
-  position: sticky;
-  top: 38px;
-  z-index: 20;
   margin-top: -12px;
   margin-bottom: var(--spacing-4);
   padding: var(--spacing-5);
   border-radius: var(--radius-lg);
-}
-
-body.no-custom-chrome .workspace-header {
-  top: 0;
 }
 
 .topbar {

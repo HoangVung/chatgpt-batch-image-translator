@@ -73,6 +73,8 @@ Thông tin tài khoản đã được tích hợp trực tiếp vào từng card
 
 Sau thay đổi này, **15 test frontend/cửa sổ đạt**, 20,537 giây: tên tài khoản từng sách, fallback nền của Book 2/3/4, chọn tài khoản thủ công Book 1 không đổi ba sách còn lại, Gemini, Việt/Anh, tên dài, keyboard/focus và streaming log. Kiểm tra 28 tổ hợp kích thước/dịch vụ/ngôn ngữ xác nhận bốn dòng tài khoản nằm trong card, tooltip đúng, không còn card tổng hợp và không tràn ngang. Ảnh và số đo nằm tại `output/book-account-labels/` (được gitignore), dùng bridge giả và tài khoản minh họa. `node --check ui/app.js` và `git diff --check` đạt; không thay đổi backend chạy sách.
 
+Card Workspace đã bỏ sticky, vị trí top và z-index riêng; dùng vị trí relative từ lớp glass và cuộn theo trang. Khoảng cuộn phía trên chỉ tính chiều cao thanh tiêu đề cửa sổ + 12px, thay vì cộng cả chiều cao Workspace. Kiểm tra cuộn thực tế ở 16 tổ hợp Việt/Anh × ChatGPT/Gemini × 1180×820, 900×620, 740×820 và 520×820: vị trí Workspace dịch chuyển đúng bằng khoảng cuộn, không tràn ngang. Khi ẩn chrome tùy chỉnh, khoảng cuộn phía trên là 12px; khi hiển thị, là 50px. **15 test frontend/cửa sổ đạt**, 22,397 giây; `node --check ui/app.js` và `git diff --check` đạt. Log kiểm tra tại `output/account-log-layout/scrolling-workspace-frontend.log` (được gitignore).
+
 ## Những việc cần nghiệm thu trên máy đích
 
 **Chưa kiểm chứng:** cửa sổ pywebview/WebView2 native, đăng nhập và dịch thật đồng thời qua ChatGPT/Gemini, CPU/RAM và chất lượng/tốc độ với bốn browser. Linux headless không thay thế các kiểm chứng này.
