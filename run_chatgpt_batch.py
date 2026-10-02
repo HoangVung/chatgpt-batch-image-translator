@@ -921,6 +921,9 @@ def reset_chat(page, service=SERVICE):
 
 def upload_image(page, img, service=SERVICE):
     if service == "gemini":
+        if not is_gemini_authenticated(page):
+            raise Exception("Tài khoản Gemini chưa đăng nhập hoặc phiên đã hết hạn. Hãy bấm 'Đăng nhập' tài khoản Gemini trên app.")
+
         try:
             input_el = page.locator('input[type="file"]').first
             if input_el.count() > 0:
@@ -931,28 +934,30 @@ def upload_image(page, img, service=SERVICE):
         except Exception:
             pass
 
-        plus_selectors = [
-            'button[aria-label*="Nội dung tải lên" i]',
-            'button[aria-label*="Uploads" i]',
-            'button[aria-label*="Add files" i]',
-            'button[aria-label*="Thêm" i]',
-            'button:has(svg)'
-        ]
-
-        plus_clicked = False
-        for sel in plus_selectors:
-            try:
-                btn = page.locator(sel).first
-                if btn.count() > 0 and btn.is_visible():
-                    btn.click(timeout=3000, force=True)
-                    plus_clicked = True
-                    sleep(2)
-                    break
-            except Exception:
-                continue
+        composer = get_gemini_composer(page)
+        plus_clicked = click_gemini_named_control(composer, GEMINI_TOOLS_MENU_NAME)
+        if not plus_clicked:
+            for sel in [
+                'button[aria-label*="Nội dung tải lên" i]',
+                'button[aria-label*="Upload" i]',
+                'button[aria-label*="tải lên" i]',
+                'button[aria-label*="công cụ" i]',
+                'button[aria-label*="tool" i]',
+                'button[aria-label*="Add files" i]',
+                'button[aria-label*="Thêm" i]',
+            ]:
+                try:
+                    btn = composer.locator(sel).first
+                    if btn.count() > 0 and btn.is_visible():
+                        btn.click(timeout=3000, force=True)
+                        plus_clicked = True
+                        sleep(1.5)
+                        break
+                except Exception:
+                    continue
 
         if not plus_clicked:
-            raise Exception("Không tìm thấy nút Plus (+) để mở menu tải lên của Gemini")
+            raise Exception("Không tìm thấy nút Plus / Menu công cụ để tải ảnh lên Gemini")
 
         sub_selectors = [
             'button:has-text("Lựa chọn tải lên khác")',
@@ -965,12 +970,13 @@ def upload_image(page, img, service=SERVICE):
                 btn = page.locator(sel).first
                 if btn.count() > 0 and btn.is_visible():
                     btn.click(timeout=3000, force=True)
-                    sleep(2)
+                    sleep(1.5)
                     break
             except Exception:
                 continue
 
         upload_btn_selectors = [
+            'button[data-test-id="local-images-files-uploader-button"]',
             'button[aria-label*="Tải tệp lên" i]',
             'button:has-text("Tải tệp lên")',
             'button[aria-label*="Upload file" i]',
