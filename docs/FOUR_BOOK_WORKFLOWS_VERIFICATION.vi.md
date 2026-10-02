@@ -9,7 +9,7 @@ Giao diện Liquid Glass/pywebview có **Sách 1–4** trong sidebar trái. Mỗ
 
 Book 1 giữ `app_settings.json` tại thư mục dữ liệu gốc; Book 2 giữ `workflows/book-2/app_settings.json`. Book 3/Book 4 dùng `workflows/book-3` và `workflows/book-4`. Phiên phụ chưa có settings chỉ kế thừa các tùy chọn chạy giống Book 2 trước đây; nguồn/kết quả/ảnh bắt đầu trống, profile ChatGPT/Gemini riêng. Không clone cookie, account list hoặc kết quả từ sách cũ.
 
-Form cấu hình, tài khoản, log và dock chạy batch tiếp tục áp dụng cho sách đang chọn. Sidebar hiển thị trạng thái, tiến trình batch và cả thư mục của bốn sách. Thông tin dịch vụ/tài khoản được thu gọn, tên dài có tooltip. Nhóm sách giữ bố cục dọc cả ở breakpoint nhỏ, hỗ trợ Up/Down, Left/Right và Home/End. Sidebar có thể cuộn để truy cập shortcut và preferences ở cửa sổ thấp.
+Form cấu hình, tài khoản, log và dock chạy batch tiếp tục áp dụng cho sách đang chọn. Sidebar hiển thị trạng thái, tiến trình batch và cả thư mục của bốn sách. Thông tin dịch vụ/tài khoản được thu gọn, tên dài có tooltip. Nhóm sách giữ bố cục dọc cả ở breakpoint nhỏ, hỗ trợ Up/Down, Left/Right và Home/End. Sidebar có thể cuộn để truy cập thông tin dịch vụ và preferences ở cửa sổ thấp.
 
 Core worker, controller, runtime, scheduler, resource guard và các tiện ích progress không thay đổi. Giữ toàn bộ logic prompt, phản hồi, tạo/tải ảnh, retry/force, auto-next, quota fallback, schema CSV/checkpoint, quyền sở hữu output và protocol kết quả.
 
@@ -66,6 +66,8 @@ Thanh điều khiển batch được chuyển vào `main.workspace`, ngay dướ
 Sau thay đổi thanh batch, **15 test frontend/cửa sổ đạt**, 21,481 giây. Kiểm tra lại 28 tổ hợp kích thước/dịch vụ/ngôn ngữ: thanh batch luôn bên dưới cụm card, không tràn ngang, nút Chạy cuộn đến được và không bị phần tử khác che. Banner chờ thao tác và auto-next tăng chiều cao thanh theo bố cục trang, không đè card; nút chạy ngay gọi đúng sách. `node --check ui/app.js` và `git diff --check` đạt. Ảnh và số đo lần này nằm tại `output/inline-batch-controls/` (được gitignore).
 
 Khung Workspace dùng chung lớp `glass`, bo góc 24px và khoảng đệm 20px như card Cấu hình; bỏ nền chữ nhật đặc. Khung cách cụm card 16px, giữ vị trí sticky và phép tính khoảng cuộn tránh che nội dung khi điều hướng. Cửa sổ thấp thu gọn khoảng đệm dọc. Sau thay đổi này, **15 test frontend/cửa sổ đạt**, 20,678 giây; kiểm tra 28 tổ hợp kích thước/dịch vụ/ngôn ngữ xác nhận nền và bán kính khớp card, tiêu đề nằm trong khung, thanh batch vẫn bên dưới card. Ảnh sáng/tối và số đo nằm tại `output/rounded-workspace-header/` (được gitignore). `git diff --check` đạt; không thay đổi logic chạy sách.
+
+Sidebar đã bỏ ba shortcut Bảng điều khiển, Tài khoản và Cấu hình; bỏ CSS/icon và listener cuộn của các shortcut. Danh sách bốn sách, thông tin dịch vụ/tài khoản từng sách và tùy chọn ngôn ngữ/theme được giữ lại; khoảng cách giữa danh sách sách và thông tin dịch vụ là 16px. Các card Cấu hình và Tài khoản trong workspace giữ nguyên. Sau thay đổi này, **15 test frontend/cửa sổ đạt**, 21,380 giây; kiểm tra 28 tổ hợp kích thước/dịch vụ/ngôn ngữ xác nhận shortcut không còn, bốn tab và các card vẫn tồn tại, không tràn ngang. Ảnh và số đo nằm tại `output/simplified-sidebar/` (được gitignore). `node --check ui/app.js` và `git diff --check` đạt.
 
 ## Những việc cần nghiệm thu trên máy đích
 

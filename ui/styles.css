@@ -308,52 +308,8 @@ select {
   text-transform: uppercase;
 }
 
-nav {
-  position: relative;
-  display: grid;
-  gap: 5px;
-}
-
-.nav {
-  display: flex;
-  width: 100%;
-  min-height: 42px;
-  align-items: center;
-  gap: 11px;
-  padding: 0 12px;
-  border: 1px solid transparent;
-  border-radius: var(--radius-sm);
-  color: var(--text-secondary);
-  background: transparent;
-  text-align: left;
-  font-size: 13px;
-  font-weight: 640;
-  transition: color var(--transition-fast), background var(--transition-fast), border-color var(--transition-fast), transform var(--transition-fast);
-}
-
-.nav:hover {
-  color: var(--text-primary);
-  background: var(--bg-control-hover);
-}
-
-.nav.active {
-  border-color: color-mix(in srgb, var(--accent) 16%, transparent);
-  color: var(--accent);
-  background: var(--accent-soft);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12);
-}
-
-.nav-icon {
-  display: grid;
-  width: 20px;
-  height: 20px;
-  place-items: center;
-  font-size: 16px;
-}
-
 .sidebar-context {
   position: relative;
-  margin-top: var(--spacing-4);
   padding: var(--spacing-3);
   border: 1px solid var(--divider);
   border-radius: var(--radius-md);
@@ -1132,19 +1088,6 @@ progress::-webkit-progress-value {
     min-height: auto;
   }
 
-  .sidebar nav {
-    display: flex;
-    flex-wrap: wrap;
-  }
-
-  .nav {
-    width: auto;
-  }
-
-  .sidebar-context {
-    margin-top: var(--spacing-4);
-  }
-
   .sidebar-footer {
     display: flex;
     align-items: end;
@@ -1432,22 +1375,6 @@ body.is-running .status-dot {
 .account-badge {
   font-variant-numeric: tabular-nums;
   font-feature-settings: "tnum";
-}
-
-/* ----- SVG nav icons (replaces prior unicode glyphs) --------------- */
-.nav-icon {
-  width: 16px;
-  height: 16px;
-  font-size: 0;
-  color: currentColor;
-  opacity: 0.85;
-  flex: 0 0 16px;
-  transition: opacity var(--transition-fast), transform var(--transition-fast);
-}
-
-.nav:hover .nav-icon,
-.nav.active .nav-icon {
-  opacity: 1;
 }
 
 /* ----- Select chevron: macOS popup double-chevron dropdown button ----- */

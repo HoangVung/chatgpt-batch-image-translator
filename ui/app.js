@@ -552,7 +552,7 @@ function bind() {
     } catch (error) { showError(error, target); }
     finally { target.launchPending = false; renderController(); }
   });
-  // Keep navigation and keyboard focus below the pinned header as text wraps.
+  // Keep keyboard focus below the pinned header as text wraps.
   const workspaceHeader = $(".workspace-header");
   const headerObserver = new ResizeObserver(() => {
     const offset = workspaceHeader.getBoundingClientRect().height + $(".titlebar").getBoundingClientRect().height + 12;
@@ -560,11 +560,6 @@ function bind() {
   });
   headerObserver.observe(workspaceHeader);
   headerObserver.observe($(".titlebar"));
-  $$('[data-scroll-target]').forEach((button) => button.addEventListener("click", () => {
-    const target = document.getElementById(button.dataset.scrollTarget);
-    if (target) target.scrollIntoView({behavior: "smooth", block: "start"});
-    $$('.nav').forEach((item) => item.classList.toggle("active", item === button));
-  }));
   ["source-folder", "output-folder", "profile-folder"].forEach((id) => {
     $(`#${id}`).addEventListener("input", updatePathPresentation);
   });
