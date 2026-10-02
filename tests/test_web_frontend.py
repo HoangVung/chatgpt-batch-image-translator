@@ -123,7 +123,8 @@ class WebFrontendTests(unittest.TestCase):
         self.assertEqual(page.locator("#log").text_content(), "initial log\n")
         self.assertEqual(page.locator("#account-select option").count(), 2)
         self.assertEqual(page.locator("#account-select").input_value(), "business")
-        self.assertEqual(page.locator("#account-context").text_content(), "Business")
+        self.assertEqual(page.locator("#tab-book-1 .workflow-account").text_content(), "Tài khoản: Business")
+        self.assertTrue(page.locator("#tab-book-1").is_visible())
         self.assertEqual(page.locator("#source-folder").get_attribute("title"), initial["settings"]["image_folder"])
 
         page.locator("#theme").select_option("dark")

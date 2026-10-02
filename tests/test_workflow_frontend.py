@@ -128,7 +128,7 @@ class WorkflowFrontendTests(unittest.TestCase):
         page.locator('#tab-book-1').focus()
         page.evaluate("""() => {
           window.stableLabels = ['#active-book', '#run-indicator span:last-child',
-            '#tab-book-1 strong', '#tab-book-2 small', '.context-service', '.context-caption']
+            '#tab-book-1 strong', '#tab-book-2 small', '#tab-book-1 .workflow-account', '#tab-book-2 .workflow-account']
             .map(selector => { const node = document.querySelector(selector); return [node, node.firstChild]; });
           for (let done = 1; done <= 10; done++) {
             emitWorkflow('book-1', 'progress_changed', {done,total:10});
@@ -167,8 +167,9 @@ class WorkflowFrontendTests(unittest.TestCase):
           }
           renderSession();
         }""")
-        first = page.locator('#service-book-1')
-        second = page.locator('#service-book-2')
+        self.assertEqual(page.locator('.sidebar-context, #service-contexts').count(), 0)
+        first = page.locator('#tab-book-1')
+        second = page.locator('#tab-book-2')
         self.assertIn('Sách 1', first.text_content())
         self.assertIn('Vung-Personal', first.text_content())
         self.assertIn('Sách 2', second.text_content())
@@ -179,18 +180,32 @@ class WorkflowFrontendTests(unittest.TestCase):
         page.locator('#tab-book-2').click()
         page.locator('#service').select_option('gemini')
         self.assertIn('Google Gemini', second.text_content())
-        self.assertIn('ChatGPT', first.text_content())
+        self.assertNotIn('Vung-Personal', second.text_content())
+        self.assertIn('Tài khoản: Vung-Personal', first.text_content())
         page.locator('#tab-book-1').click()
         self.assertIn('Google Gemini', second.text_content())
         page.locator('#language').select_option('en')
         self.assertIn('Book 1', first.text_content())
         self.assertIn('Book 2', second.text_content())
         for number in (3, 4):
-            row = page.locator(f'#service-book-{number}')
+            row = page.locator(f'#tab-book-{number}')
             self.assertIn(f'Book {number}', row.text_content())
             self.assertIn('Vung-Business', row.text_content())
             page.evaluate(f"emitWorkflow('book-{number}','account_event',{{event:{{event:'account_switched',account_id:'personal'}}}})")
             self.assertIn('Vung-Personal', row.text_content())
+        page.evaluate("""() => {
+          window.pywebview.api.select_account = (accountId, sessionId) => {
+            calls.push(['select_account',sessionId,accountId]);
+            return Promise.resolve({ok:true,data:{accounts:sessions.get(sessionId).settings.chatgpt_accounts,active_id:accountId}});
+          };
+        }""")
+        page.locator('#account-select').select_option('business')
+        page.wait_for_function("document.querySelector('#tab-book-1 .workflow-account').textContent === 'Account: Vung-Business'")
+        self.assertIn(['select_account', 'book-1', 'business'], page.evaluate('calls'))
+        self.assertIn('Google Gemini', second.text_content())
+        for number in (3, 4):
+            self.assertEqual(page.locator(f'#tab-book-{number} .workflow-account').text_content(), 'Account: Vung-Personal')
+        self.assertEqual(page.locator('#tab-book-1').get_attribute('aria-selected'), 'true')
 
     def test_background_events_drafts_controls_and_keyboard_stay_with_book(self):
         page = self.page
@@ -371,7 +386,7 @@ class WorkflowFrontendTests(unittest.TestCase):
             page.set_viewport_size({'width': width, 'height': height})
             self.assertTrue(page.evaluate('document.documentElement.scrollWidth <= document.documentElement.clientWidth'))
             for number in range(1, 5):
-                caption = page.locator(f'#service-book-{number} .context-caption')
+                caption = page.locator(f'#tab-book-{number} .workflow-account')
                 self.assertEqual(caption.get_attribute('title'), caption.text_content())
                 self.assertEqual(caption.evaluate('node=>getComputedStyle(node).textOverflow'), 'ellipsis')
 

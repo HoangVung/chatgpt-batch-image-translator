@@ -60,7 +60,8 @@
 .workflow-tabs .workflow-tab small { font-size: 12px; line-height: 1.3; font-weight: 500; }
 .workflow-tab[aria-selected="true"] { border-color: var(--accent); background: var(--accent-soft); color: var(--text-primary); box-shadow: inset 0 -2px var(--accent); }
 .workflow-tab small { width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.workflow-tab[data-attention="true"] small { color: var(--warning); }
+.workflow-tabs .workflow-tab .workflow-account { color: var(--text-secondary); font-size: 11px; }
+.workflow-tab[data-attention="true"] .workflow-status { color: var(--warning); }
 .confirm-output { justify-self: start; font-size: 12px; color: var(--text-secondary); }
 .headline-caption { max-width: 72ch; }
 
@@ -308,72 +309,13 @@ select {
   text-transform: uppercase;
 }
 
-.sidebar-context {
-  position: relative;
-  padding: var(--spacing-3);
-  border: 1px solid var(--divider);
-  border-radius: var(--radius-md);
-  background: color-mix(in srgb, var(--bg-field) 78%, transparent);
-}
-
-.book-service-context {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  column-gap: 8px;
-  align-items: center;
-  min-width: 0;
-  margin-top: 8px;
-}
-
-.book-service-context + .book-service-context {
-  border-top: 1px solid var(--divider);
-  padding-top: 8px;
-}
-
-.context-book {
-  display: block;
-  color: var(--text-muted);
-  font-size: 11px;
-}
-
-.context-book[hidden] { display: none; }
-.book-service-context[data-active="true"] .context-book { color: var(--accent); }
-.book-service-context .context-pill { grid-column: 2; margin-top: 0; }
-.book-service-context .context-caption { grid-column: 2; margin-top: 3px; padding-left: 0; white-space: nowrap; }
-.book-service-context:has(.context-book[hidden]) { grid-template-columns: minmax(0, 1fr); }
-.book-service-context:has(.context-book[hidden]) .context-pill,
-.book-service-context:has(.context-book[hidden]) .context-caption { grid-column: 1; }
-
-.sidebar-label,
-.context-caption {
-  margin: 0;
-}
-
 .sidebar-label {
+  margin: 0;
   color: var(--text-muted);
   font-size: 10px;
   font-weight: 720;
   letter-spacing: 0.1em;
   text-transform: uppercase;
-}
-
-.context-pill {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  gap: var(--spacing-2);
-  margin-top: 9px;
-}
-
-.context-pill strong,
-.context-caption {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.context-pill strong {
-  font-size: 13px;
 }
 
 .context-dot,
@@ -385,13 +327,6 @@ select {
   border-radius: 50%;
   background: var(--success);
   box-shadow: 0 0 0 4px var(--success-soft);
-}
-
-.context-caption {
-  margin-top: 6px;
-  padding-left: 15px;
-  color: var(--text-muted);
-  font-size: 11px;
 }
 
 .sidebar-footer {

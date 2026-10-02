@@ -6,6 +6,8 @@ Mốc mã nguồn: `1c833bf` trên nhánh `work`.
 Trạng thái: **đã triển khai bốn phiên và sidebar trái**; xem [kết quả kiểm chứng](FOUR_BOOK_WORKFLOWS_VERIFICATION.vi.md). Các bảng khảo sát và bước triển khai bên dưới ghi lại kế hoạch từ mốc mã nguồn ban đầu.
 Yêu cầu giữ nguyên logic được hiểu là giữ toàn bộ hành vi hiện có của hai phiên Book 1/Book 2.
 
+Cập nhật giao diện sau triển khai theo yêu cầu mới: bỏ các shortcut sidebar và card tổng hợp dịch vụ/tài khoản; đưa tên tài khoản vào từng card sách. `renderTabs()` cập nhật các dòng bằng class riêng thay cho vị trí con; các ID `#service-contexts`, `#service-context` và `#account-context` trong kế hoạch gốc bên dưới đã được loại bỏ. Payload một phiên vẫn được hỗ trợ và hiển thị card Sách 1. Bố cục hiện tại và kiểm chứng nằm trong tài liệu kết quả liên kết ở trên.
+
 ## 1. Kết luận và phạm vi
 
 Có thể thêm Book 3/Book 4 bằng cách mở rộng kiến trúc session hiện có. Mỗi sách tiếp tục có một `WebApi`, `DesktopController`, scheduler và worker subprocess riêng. Bốn worker dùng chung mã xử lý; không cần sao chép worker thành bốn bản hoặc chạy chung các biến toàn cục trong một tiến trình.
