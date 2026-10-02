@@ -65,6 +65,8 @@ Thanh điều khiển batch được chuyển vào `main.workspace`, ngay dướ
 
 Sau thay đổi thanh batch, **15 test frontend/cửa sổ đạt**, 21,481 giây. Kiểm tra lại 28 tổ hợp kích thước/dịch vụ/ngôn ngữ: thanh batch luôn bên dưới cụm card, không tràn ngang, nút Chạy cuộn đến được và không bị phần tử khác che. Banner chờ thao tác và auto-next tăng chiều cao thanh theo bố cục trang, không đè card; nút chạy ngay gọi đúng sách. `node --check ui/app.js` và `git diff --check` đạt. Ảnh và số đo lần này nằm tại `output/inline-batch-controls/` (được gitignore).
 
+Khung Workspace dùng chung lớp `glass`, bo góc 24px và khoảng đệm 20px như card Cấu hình; bỏ nền chữ nhật đặc. Khung cách cụm card 16px, giữ vị trí sticky và phép tính khoảng cuộn tránh che nội dung khi điều hướng. Cửa sổ thấp thu gọn khoảng đệm dọc. Sau thay đổi này, **15 test frontend/cửa sổ đạt**, 20,678 giây; kiểm tra 28 tổ hợp kích thước/dịch vụ/ngôn ngữ xác nhận nền và bán kính khớp card, tiêu đề nằm trong khung, thanh batch vẫn bên dưới card. Ảnh sáng/tối và số đo nằm tại `output/rounded-workspace-header/` (được gitignore). `git diff --check` đạt; không thay đổi logic chạy sách.
+
 ## Những việc cần nghiệm thu trên máy đích
 
 **Chưa kiểm chứng:** cửa sổ pywebview/WebView2 native, đăng nhập và dịch thật đồng thời qua ChatGPT/Gemini, CPU/RAM và chất lượng/tốc độ với bốn browser. Linux headless không thay thế các kiểm chứng này.

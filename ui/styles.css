@@ -483,10 +483,9 @@ nav {
   top: 38px;
   z-index: 20;
   margin-top: -12px;
-  padding: 12px 0 18px;
-  background:
-    radial-gradient(ellipse at top right, rgba(188, 126, 255, 0.18), transparent 70%),
-    var(--bg-app);
+  margin-bottom: var(--spacing-4);
+  padding: var(--spacing-5);
+  border-radius: var(--radius-lg);
 }
 
 body.no-custom-chrome .workspace-header {
@@ -494,12 +493,13 @@ body.no-custom-chrome .workspace-header {
 }
 
 .topbar {
+  position: relative;
   display: flex;
   min-width: 0;
   align-items: center;
   justify-content: space-between;
   gap: var(--spacing-5);
-  padding: 0 var(--spacing-1) var(--spacing-5);
+  padding: 0;
 }
 
 .eyebrow,
@@ -1685,8 +1685,7 @@ body.no-custom-chrome { padding-top: 0; }
 }
 
 @media (max-height: 700px) {
-  .workspace-header { padding-bottom: 8px; }
-  .topbar { padding-bottom: 8px; }
+  .workspace-header { padding: var(--spacing-3) var(--spacing-5); }
   .topbar h1 { font-size: 23px; }
   .topbar .headline-caption { display: none; }
   .workflow-tabs .workflow-tab { min-height: 52px; padding: 7px 12px; gap: 2px; }
