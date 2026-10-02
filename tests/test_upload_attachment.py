@@ -1,11 +1,14 @@
 """Upload attachment regressions using real Chromium, without a live account."""
+import base64
 import importlib.util
 import os
 from pathlib import Path
 import sys
+import struct
 import tempfile
 import unittest
 from unittest.mock import patch
+import zlib
 
 from playwright.sync_api import sync_playwright
 
@@ -71,6 +74,23 @@ class UploadAttachmentTests(unittest.TestCase):
             </main>
         """)
         self.assertTrue(self.wait_attached())
+
+    def test_icon_words_inside_valid_png_base64_are_not_icon_url_hints(self):
+        # Insert a valid private ancillary PNG chunk, aligned so that the
+        # encoded payload contains the word that triggered the real rejection.
+        for word in ('emojiAAA', 'avatarAA'):
+            with self.subTest(word=word):
+                png = image_bytes()
+                padding = (-(len(png) - 12 + 8)) % 3
+                payload = b'\0' * padding + base64.b64decode(word)
+                chunk = b'raNd' + payload
+                chunk = struct.pack('>I', len(payload)) + chunk + struct.pack('>I', zlib.crc32(chunk))
+                png = png[:-12] + chunk + png[-12:]
+                src = 'data:image/png;base64,' + base64.b64encode(png).decode()
+                self.assertIn(word.lower(), src.lower())
+                self.show(f'<form><img src="{src}"><div id="prompt-textarea" contenteditable="true"></div></form>')
+                self.assertEqual(self.page.evaluate('document.images[0].naturalWidth'), 320)
+                self.assertTrue(self.wait_attached())
 
     def test_file_input_upload_proceeds_to_sending_transcription_prompt(self):
         self.show("""
@@ -180,3 +200,30 @@ class UploadAttachmentTests(unittest.TestCase):
                 self.show(f'<form>{preview}<div id="prompt-textarea" contenteditable="true"></div></form>')
                 with self.assertRaisesRegex(Exception, 'Không xác nhận được ảnh'):
                     self.wait_attached()
+
+    def test_captured_prosemirror_composer_layout_without_editor_id(self):
+        self.show(f"""
+            <main><form class="relative flex flex-col gap-2"><div class="contents">
+                <div class="ComposerLayoutRoot-XCKS7O" role="presentation">
+                    <div class="relative w-full flex-col gap-2 flex"><div class="ComposerModeSurface-lVLm7j">
+                        <div class="ComposerLayoutBody-uBBf1A">
+                            <div class="flex flex-wrap items-end gap-3 p-1">
+                                <div class="composer-attachment-surface" role="button">
+                                    <span class="composer-attachment-surface">
+                                        <img class="size-full object-cover" width="122" height="122"
+                                             src="{image_url(size=(1237, 1882))}">
+                                    </span>
+                                </div>
+                            </div>
+                            <div class="ComposerLayoutFooter-_8IVRO"><div class="AdaptiveFooterInput-zji599">
+                                <div class="contents"><div class="ComposerLayoutInput-KwIAr_">
+                                    <div role="presentation"><div class="ProseMirror" role="textbox"
+                                         contenteditable="true" style="width:732px;height:26px"></div></div>
+                                </div></div>
+                            </div></div>
+                        </div>
+                    </div></div>
+                </div>
+            </div></form></main>
+        """)
+        self.assertTrue(self.wait_attached())

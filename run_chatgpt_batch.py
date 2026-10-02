@@ -1030,9 +1030,13 @@ def wait_upload_attached(page, timeout=90):
                             const src = img.currentSrc || img.getAttribute('src') || '';
                             const box = img.getBoundingClientRect();
                             const low = src.toLowerCase();
+                            // Encoded image bytes can contain "emoji" or "avatar"
+                            // by chance. Only use those hints for ordinary URLs.
+                            const iconUrl = !low.startsWith('data:') && !low.startsWith('blob:') &&
+                                (low.includes('avatar') || low.includes('emoji'));
                             return visible(img) && box.width > 40 && box.height > 40 &&
                                 img.complete && img.naturalWidth > 0 &&
-                                !low.includes('avatar') && !low.includes('emoji') &&
+                                !iconUrl &&
                                 !low.startsWith('data:image/svg');
                         });
                         if (attached) return true;
