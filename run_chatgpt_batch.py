@@ -701,31 +701,68 @@ def wait_page_ready(page, timeout=120):
     return False
 
 
+def is_gemini_authenticated(page):
+    """Xác định tài khoản Gemini đã thực sự đăng nhập hay chưa."""
+    try:
+        sign_in_selectors = [
+            '.mavatar-sign-in-button',
+            'a[href*="accounts.google.com/ServiceLogin"]',
+            'a[href*="accounts.google.com/signin"]',
+            'a:has-text("Sign in to save activity")',
+        ]
+        for sel in sign_in_selectors:
+            loc = page.locator(sel).first
+            if loc.count() > 0 and loc.is_visible():
+                return False
+
+        account_selectors = [
+            'a[aria-label*="Tài khoản Google" i]',
+            'a[aria-label*="Google Account" i]',
+            '.mavatar-footer-left',
+            'button[aria-label*="Cài đặt" i]',
+            'button[aria-label*="Settings" i]',
+            'a[aria-label*="Cuộc trò chuyện mới" i]',
+            'a[aria-label*="New chat" i]',
+        ]
+        for sel in account_selectors:
+            loc = page.locator(sel).first
+            if loc.count() > 0 and loc.is_visible():
+                return True
+    except Exception:
+        pass
+    return False
+
+
 def login_if_needed(page, service=SERVICE):
     url = "https://gemini.google.com/app" if service == "gemini" else "https://chatgpt.com/"
     page.goto(url, wait_until="domcontentloaded")
     wait_if_cloudflare(page)
 
-    signin_selectors = (
-        [
-            '.sign-in-button',
-            'a:has-text("Sign in")',
-            'button:has-text("Sign in")',
-            'a:has-text("Đăng nhập")',
-            'button:has-text("Đăng nhập")',
-            'a:has-text("Get started")',
-            'button:has-text("Get started")',
-            'a:has-text("Bắt đầu")',
-            'button:has-text("Bắt đầu")',
-        ]
-        if service == "gemini"
-        else [
-            'a:has-text("Log in")',
-            'button:has-text("Log in")',
-            'a:has-text("Đăng nhập")',
-            'button:has-text("Đăng nhập")',
-        ]
-    )
+    if service == "gemini":
+        sleep(2)
+        if is_gemini_authenticated(page):
+            print("✅ Đã vào được GEMINI.")
+            return
+
+        print("\nMANUAL_ACTION_REQUIRED")
+        print("⚠️ Chưa đăng nhập GEMINI.")
+        print("👉 Đăng nhập tài khoản Google / Gemini trong cửa sổ trình duyệt.")
+        print("👉 Sau khi đăng nhập thành công và thấy giao diện chat Gemini, quay lại app bấm 'Tiếp tục sau can thiệp'.")
+        input("Chờ app gửi ENTER sau khi login xong... ")
+
+        wait_if_cloudflare(page)
+        sleep(2)
+        if not is_gemini_authenticated(page) and not wait_page_ready(page, 30):
+            raise Exception("GEMINI chưa sẵn sàng sau khi đăng nhập.")
+        print("✅ Đã xác nhận đăng nhập GEMINI.")
+        return
+
+    signin_selectors = [
+        'a:has-text("Log in")',
+        'button:has-text("Log in")',
+        'a:has-text("Đăng nhập")',
+        'button:has-text("Đăng nhập")',
+    ]
     has_signin = False
     for selector in signin_selectors:
         try:
@@ -752,15 +789,26 @@ def login_if_needed(page, service=SERVICE):
 
 
 def launch_persistent_context(playwright, profile_dir):
-    return playwright.chromium.launch_persistent_context(
-        user_data_dir=profile_dir,
-        headless=False,
-        accept_downloads=True,
-        args=[
-            "--disable-blink-features=AutomationControlled"
+    kwargs = {
+        "user_data_dir": profile_dir,
+        "headless": False,
+        "accept_downloads": True,
+        "ignore_default_args": ["--enable-automation"],
+        "args": [
+            "--disable-blink-features=AutomationControlled",
         ],
-        viewport={"width": 1400, "height": 900}
-    )
+        "viewport": {"width": 1400, "height": 900},
+    }
+    if not os.environ.get("BATCH_TEST_BROWSER"):
+        chrome_candidates = [
+            r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+            r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+            os.path.expandvars(r"%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe"),
+        ]
+        if any(os.path.exists(p) for p in chrome_candidates):
+            kwargs["channel"] = "chrome"
+
+    return playwright.chromium.launch_persistent_context(**kwargs)
 
 
 def has_signin_prompt(page):
@@ -838,15 +886,7 @@ def login_only():
     with sync_playwright() as p:
         context = None
         try:
-            context = p.chromium.launch_persistent_context(
-                user_data_dir=PROFILE_DIR,
-                headless=False,
-                accept_downloads=True,
-                args=[
-                    "--disable-blink-features=AutomationControlled"
-                ],
-                viewport={"width": 1400, "height": 900}
-            )
+            context = launch_persistent_context(p, PROFILE_DIR)
             page = context.pages[0] if context.pages else context.new_page()
             # Keep this browser visible: the user needs it to complete sign-in.
             login_if_needed(page)
