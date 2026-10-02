@@ -2053,7 +2053,9 @@ GEMINI_IMAGE_TOOL_NAME = re.compile(
     r"tạo (?:hình )?ảnh|hình ảnh|ảnh)(?:\s|$)", re.IGNORECASE
 )
 GEMINI_TOOLS_MENU_NAME = re.compile(
-    r"^(?:tools|open tools(?: menu)?|công cụ|mở (?:menu |trình đơn )?công cụ)$",
+    r"^(?:tools|open tools(?: menu)?|công cụ|mở (?:menu |trình đơn )?công cụ|"
+    r"nội dung tải lên và công cụ|tải lên và công cụ|thêm tệp và công cụ|"
+    r"uploads?(?: and| &)? tools?|add files?(?: and| &)? tools?)$",
     re.IGNORECASE,
 )
 
@@ -2166,14 +2168,45 @@ def ensure_gemini_image_tool(page, timeout=15):
     # Some layouts expose the image tool directly beside the prompt.
     selected = click_gemini_named_control(composer, GEMINI_IMAGE_TOOL_NAME)
     if not selected:
-        if not click_gemini_named_control(composer, GEMINI_TOOLS_MENU_NAME):
+        clicked_menu = click_gemini_named_control(composer, GEMINI_TOOLS_MENU_NAME)
+        if not clicked_menu:
+            for sel in [
+                'button[aria-label*="công cụ" i]',
+                'button[aria-label*="tool" i]',
+                'button[aria-label*="nội dung tải lên" i]',
+                'button[aria-label*="tải lên" i]',
+            ]:
+                try:
+                    btn = composer.locator(sel).first
+                    if btn.count() > 0 and btn.is_visible() and btn.is_enabled():
+                        btn.click(timeout=3000)
+                        clicked_menu = True
+                        break
+                except Exception:
+                    pass
+
+        if not clicked_menu:
             raise RuntimeError("Không tìm thấy nút Công cụ / Tools của Gemini; chưa gửi prompt tạo ảnh.")
+
         # Angular menus may be rendered in an overlay outside the composer.
         start = time.monotonic()
         while time.monotonic() - start < timeout:
-            if click_gemini_named_control(page, GEMINI_IMAGE_TOOL_NAME, ("menuitem", "option", "button")):
+            if click_gemini_named_control(
+                page, GEMINI_IMAGE_TOOL_NAME,
+                ("menuitem", "menuitemcheckbox", "option", "button", "checkbox")
+            ):
                 selected = True
                 break
+            try:
+                item = page.locator('[role*="menuitem"], button').filter(
+                    has_text=re.compile(r"^(?:tạo (?:hình )?ảnh|create images?)$", re.IGNORECASE)
+                ).first
+                if item.count() > 0 and item.is_visible() and item.is_enabled():
+                    item.click(timeout=3000)
+                    selected = True
+                    break
+            except Exception:
+                pass
             sleep(0.5)
     if selected:
         start = time.monotonic()

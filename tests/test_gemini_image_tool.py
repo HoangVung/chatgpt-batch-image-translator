@@ -126,6 +126,18 @@ class GeminiImageToolTests(unittest.TestCase):
         self.assertTrue(self.worker.gemini_image_tool_selected(self.page))
         self.assertEqual(self.page.evaluate("events.slice(0, 3)"), ["tools", "image", "selected"])
 
+    def test_live_gemini_dom_structure(self):
+        self.show(
+            tools="Nội dung tải lên và công cụ",
+            image="Tạo hình ảnh",
+            role="menuitemcheckbox",
+            chip='<button class="mdc-button" aria-label="Bỏ chọn Hình ảnh">Hình ảnh</button>'
+        )
+        self.assertEqual(self.create(), "generated-image")
+        self.assertTrue(self.worker.gemini_image_tool_selected(self.page))
+        self.assertEqual(self.page.evaluate("sent"), [self.worker.PROMPT_TAO_ANH_GEMINI])
+
+
     def test_already_selected_tool_is_preserved(self):
         self.show()
         self.page.locator("#chips").evaluate(
