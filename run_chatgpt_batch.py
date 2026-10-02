@@ -982,6 +982,7 @@ def wait_upload_attached(page, timeout=90):
     Chờ ảnh đã bám vào khung chat trước khi gửi prompt.
     Tránh tình huống upload chưa xong đã gõ/gửi prompt.
     """
+    print("→ Chờ nhận diện ảnh tải lên trong ô nhập")
     start = time.time()
 
     while time.time() - start < timeout:
@@ -990,42 +991,58 @@ def wait_upload_attached(page, timeout=90):
         try:
             ok = page.evaluate("""
                 () => {
-                    const prompt = document.querySelector('#prompt-textarea') || 
-                                   document.querySelector('.ql-editor[contenteditable="true"]') ||
-                                   document.querySelector('rich-textarea div[contenteditable="true"]') ||
-                                   document.querySelector('div[contenteditable="true"]');
+                    const visible = (el) => {
+                        const box = el.getBoundingClientRect();
+                        const style = getComputedStyle(el);
+                        return box.width > 0 && box.height > 0 &&
+                            style.visibility !== 'hidden' && style.display !== 'none';
+                    };
+                    let prompt = null;
+                    for (const selector of [
+                        '#prompt-textarea', '.ql-editor[contenteditable="true"]',
+                        'rich-textarea div[contenteditable="true"]', 'div[contenteditable="true"]'
+                    ]) {
+                        prompt = Array.from(document.querySelectorAll(selector)).find(visible);
+                        if (prompt) break;
+                    }
                     if (!prompt) return false;
 
-                    const roots = [];
-                    const addRoot = (root) => {
-                        if (root && !roots.includes(root)) roots.push(root);
-                    };
-                    let root = prompt.closest('form') || prompt.closest('.input-area-container') || prompt.parentElement;
-                    addRoot(root);
+                    // Previews can be siblings several wrappers above the editor,
+                    // without a form or any composer-related class name. Walk the
+                    // local ancestors, but never search the conversation/sidebar.
+                    const outsideComposer = [
+                        'nav', 'aside', '[role="navigation"]',
+                        '[data-testid^="conversation-turn"]', '[data-content-search-turn-key]',
+                        '[data-message-author-role]', '[data-turn="user"]', '[data-turn="assistant"]',
+                        '[data-chatgpt-search-unit-key]', '[data-content-search-unit-key]',
+                        'user-query', 'model-response'
+                    ].join(',');
+                    if (prompt.closest(outsideComposer)) return false;
+                    const composerBoundary = 'form, .input-area-container, #composer-background, ' +
+                        '[data-testid="composer"], [data-type="unified-composer"]';
 
-                    for (let i = 0; i < 6 && root && root.parentElement; i++) {
-                        root = root.parentElement;
-                        const descriptor = [root.className, root.getAttribute('data-testid'), root.getAttribute('role')]
-                            .filter(Boolean)
-                            .join(' ')
-                            .toLowerCase();
-                        if (/(composer|input|prompt|upload|rich-textarea)/.test(descriptor)) {
-                            addRoot(root);
-                        }
+                    for (let root = prompt.parentElement; root; root = root.parentElement) {
+                        if (root === document.body || root === document.documentElement ||
+                            root.matches('main, [role="main"]') ||
+                            root.matches(outsideComposer) || root.querySelector(outsideComposer)) break;
+
+                        const attached = Array.from(root.querySelectorAll('img')).some(img => {
+                            const src = img.currentSrc || img.getAttribute('src') || '';
+                            const box = img.getBoundingClientRect();
+                            const low = src.toLowerCase();
+                            return visible(img) && box.width > 40 && box.height > 40 &&
+                                img.complete && img.naturalWidth > 0 &&
+                                !low.includes('avatar') && !low.includes('emoji') &&
+                                !low.startsWith('data:image/svg');
+                        });
+                        if (attached) return true;
+                        if (root.matches(composerBoundary)) break;
                     }
-
-                    return roots.some((candidateRoot) => Array.from(candidateRoot.querySelectorAll('img')).some(img => {
-                        const src = img.getAttribute('src') || '';
-                        const box = img.getBoundingClientRect();
-                        const low = src.toLowerCase();
-                        return box.width > 40 && box.height > 40 &&
-                            !low.includes('avatar') &&
-                            !low.includes('emoji') &&
-                            !src.startsWith('data:image/svg');
-                    }));
+                    return false;
                 }
             """)
             if ok:
+                print("✓ Đã nhận diện ảnh tải lên trong ô nhập")
                 sleep(2)
                 return True
         except Exception:
