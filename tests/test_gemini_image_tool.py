@@ -189,6 +189,16 @@ class GeminiImageToolTests(unittest.TestCase):
         self.assertEqual(self.page.evaluate("sent"), [self.worker.PROMPT_TAO_ANH])
         self.assertNotIn("tools", self.page.evaluate("events"))
 
+    def test_ensure_gemini_normal_chat_deselects_tool_chip(self):
+        self.show()
+        self.page.locator("#chips").evaluate("""el => {
+            el.innerHTML = '<button class="tool-chip" aria-pressed="true" aria-label="Bỏ chọn Tạo ảnh">Tạo ảnh<mat-icon>close</mat-icon></button>';
+            el.querySelector('button').onclick = () => { el.innerHTML = ''; };
+        }""")
+        self.assertTrue(self.worker.gemini_image_tool_selected(self.page))
+        self.worker.ensure_gemini_normal_chat(self.page)
+        self.assertFalse(self.worker.gemini_image_tool_selected(self.page))
+
 
 if __name__ == "__main__":
     unittest.main()

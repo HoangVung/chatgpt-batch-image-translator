@@ -193,7 +193,7 @@ SEND_VERIFY_TIMEOUT = 45
 PROMPT_CHEP_LAI = "chép lại nguyên văn"
 PROMPT_DICH = "dịch bản chép lại"
 PROMPT_TAO_ANH = "Tạo ảnh với bản dịch"
-PROMPT_TAO_ANH_GEMINI = "Tạo lại ảnh gốc với bản dịch tiếng Việt ở trên"
+PROMPT_TAO_ANH_GEMINI = "tạo ảnh gốc từ bản dịch"
 
 IMAGE_QUOTA_MARKERS = (
     "Bạn đã hết lượt tạo hình ảnh",
@@ -2125,6 +2125,34 @@ def click_gemini_named_control(scope, name, roles=("button",)):
     return False
 
 
+def ensure_gemini_normal_chat(page):
+    """Đảm bảo ô chat Gemini ở chế độ chat thông thường (không chọn công cụ tạo ảnh)."""
+    try:
+        if not gemini_image_tool_selected(page):
+            return
+        print("→ Bỏ chọn công cụ tạo ảnh để thực hiện chat/dịch thông thường")
+        composer = get_gemini_composer(page)
+        composer.evaluate(r"""
+            (root) => {
+                const deselectBtn = root.querySelector(
+                    'button[aria-label*="Deselect" i], button[aria-label*="Bỏ chọn" i], ' +
+                    'button[aria-label*="Remove" i], .tool-chip mat-icon, .tool-chip button'
+                );
+                if (deselectBtn) {
+                    deselectBtn.click();
+                    return;
+                }
+                const activeTool = root.querySelector('[aria-pressed="true"], .tool-chip, .selected');
+                if (activeTool) {
+                    activeTool.click();
+                }
+            }
+        """)
+        sleep(0.5)
+    except Exception:
+        pass
+
+
 def ensure_gemini_image_tool(page, timeout=15):
     """Select image generation and confirm its composer chip before entering a prompt."""
     print("→ Chọn công cụ tạo ảnh của Gemini")
@@ -2504,6 +2532,8 @@ def process_one(page, image_indices, img):
     print(f"\n--- {index}: {img.name} → {save_name} ---")
 
     reset_chat(page)
+    if SERVICE == "gemini":
+        ensure_gemini_normal_chat(page)
     upload_image(page, img)
     wait_upload_attached(page, timeout=90)
 

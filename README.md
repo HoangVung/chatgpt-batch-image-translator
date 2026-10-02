@@ -68,7 +68,7 @@ Với mỗi ảnh, app sẽ:
 4. Đợi AI phản hồi xong.
 5. Gửi prompt `dịch bản chép lại`.
 6. Đợi bản dịch.
-7. Với Gemini, chọn **Công cụ → Tạo ảnh** và xác nhận công cụ đã bật rồi gửi `Tạo lại ảnh gốc với bản dịch tiếng Việt ở trên`. Với ChatGPT, gửi `Tạo ảnh với bản dịch`.
+7. Với Gemini, giữ nguyên cửa sổ chat, chọn **Công cụ → Tạo ảnh** và xác nhận công cụ đã bật rồi gửi `tạo ảnh gốc từ bản dịch`. Với ChatGPT, gửi `Tạo ảnh với bản dịch`.
 8. Tải ảnh kết quả về thư mục output (tự động fallback qua nhiều cơ chế tải nếu ảnh bị bảo vệ hoặc cần phiên đăng nhập).
 
 Tên đầu ra bao gồm cả hai số của file nguồn để không ghi đè giữa các ảnh. Ví dụ: `73_129.jpg` được lưu là `00073_00129VN.png`.
@@ -270,7 +270,7 @@ For each image, the app will:
 4. Wait for AI to finish responding.
 5. Send the prompt `dịch bản chép lại`.
 6. Wait for the translation.
-7. For Gemini, select **Tools → Create images**, confirm the tool is active, then send `Tạo lại ảnh gốc với bản dịch tiếng Việt ở trên`. For ChatGPT, send `Tạo ảnh với bản dịch`.
+7. For Gemini, keep the same chat window, select **Tools → Create images**, confirm the tool is active, then send `tạo ảnh gốc từ bản dịch`. For ChatGPT, send `Tạo ảnh với bản dịch`.
 8. Download the generated image to the output folder (with multi-stage download fallbacks).
 
 Output names include both source numbers to avoid collisions. For example, `73_129.jpg` is saved as `00073_00129VN.png`.
