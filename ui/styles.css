@@ -573,8 +573,14 @@ h2 {
 .content-grid {
   display: grid;
   grid-template-columns: minmax(0, 1.35fr) minmax(290px, 0.9fr);
+  grid-template-rows: max-content minmax(0, 1fr);
   gap: var(--spacing-4);
   min-width: 0;
+}
+
+.configuration-card {
+  grid-column: 1;
+  grid-row: 1 / span 2;
 }
 
 .card,
@@ -965,6 +971,7 @@ progress::-webkit-progress-value {
 
 .accounts-card {
   grid-column: 2;
+  grid-row: 1;
   align-self: start;
 }
 
@@ -986,12 +993,20 @@ progress::-webkit-progress-value {
 }
 
 .log-card {
-  grid-column: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  grid-column: 2;
+  grid-row: 2;
+  min-height: 0;
   padding: var(--spacing-5);
   border: 1px solid var(--log-border);
   color: var(--log-text);
   background: var(--log-bg);
   box-shadow: var(--shadow-panel), inset 0 1px 0 var(--log-edge);
+}
+
+.content-grid:has(.accounts-card.hidden) .log-card {
+  grid-row: 1 / span 2;
 }
 
 .log-card h2 {
@@ -1003,14 +1018,17 @@ progress::-webkit-progress-value {
 }
 
 .log-heading {
-  align-items: flex-end;
+  flex-direction: column;
+  flex-shrink: 0;
+  align-items: flex-start;
+  gap: var(--spacing-3);
   margin-bottom: var(--spacing-3);
 }
 
 .log-actions {
   display: flex;
   flex-wrap: wrap;
-  justify-content: flex-end;
+  justify-content: flex-start;
   gap: 6px;
 }
 
@@ -1034,9 +1052,12 @@ progress::-webkit-progress-value {
 }
 
 #log {
+  /* Incoming text must scroll inside the panel without expanding the grid. */
+  contain: size;
+  flex: 1;
   min-width: 0;
-  min-height: 230px;
-  max-height: 390px;
+  height: 0;
+  min-height: 160px;
   margin: 0;
   padding: var(--spacing-4);
   overflow: auto;
@@ -1079,13 +1100,22 @@ progress::-webkit-progress-value {
 
   .content-grid {
     grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: none;
   }
 
   .configuration-card,
   .accounts-card,
-  .log-card {
+  .log-card,
+  .content-grid:has(.accounts-card.hidden) .log-card {
     grid-column: 1;
     grid-row: auto;
+  }
+
+  #log {
+    flex: auto;
+    height: 280px;
+    min-height: 230px;
+    max-height: 390px;
   }
 
 }

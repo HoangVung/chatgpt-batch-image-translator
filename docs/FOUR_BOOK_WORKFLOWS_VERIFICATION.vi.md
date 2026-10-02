@@ -51,6 +51,16 @@ Lần kiểm chứng Linux này dùng virtualenv `/tmp/four-books-venv` với re
 
 Bằng chứng cục bộ nằm tại `output/four-books-verification/` (được gitignore): `tests.log`, `source-smoke.json`, `self-test.json`, `screenshots/four-books-dark.png` và `screenshots/four-books-light-small.png`. Ảnh chụp dùng bridge giả và số liệu minh họa, không phải dịch sách thật. Thư mục ảnh và snapshot dùng trong smoke/test được tạo tạm, không sử dụng dữ liệu sản xuất.
 
+## Cập nhật bố cục Tài khoản và Nhật ký
+
+Cấu hình nằm ở cột trái; Tài khoản và Nhật ký xếp liền nhau ở cột phải, thay cho Nhật ký toàn chiều ngang bên dưới. Hai cột kết thúc cùng hàng, tận dụng vùng trống dưới Tài khoản. Khi chọn Gemini, Tài khoản được ẩn và Nhật ký dùng toàn bộ chiều cao cột phải. Cửa sổ rộng không quá 1080px chuyển thành một cột: Cấu hình, Tài khoản (nếu có), Nhật ký.
+
+Chỉ thay đổi CSS bố cục; giữ nguyên form, ID điều khiển, bridge, dữ liệu và logic bốn sách. Vùng log có kích thước giới hạn và cuộn riêng; nội dung mới không làm card dài ra hay đẩy cấu hình xuống.
+
+Kiểm tra Chromium với 28 tổ hợp: Việt/Anh × ChatGPT/Gemini × 1180×820, 1440×1000, 1100×700, 1080×820, 900×620, 740×820 và 520×820. Tất cả không tràn ngang; Nhật ký liền ngay dưới Tài khoản ở màn hình rộng, lên đầu cột khi Gemini; log dài vẫn cuộn trong card và không đổi chiều cao bố cục. Ảnh sáng/tối và số đo nằm tại `output/account-log-layout/` (được gitignore), dùng bridge giả và nội dung minh họa.
+
+Sau thay đổi CSS cuối, chạy lại `test_workflow_frontend`, `test_web_frontend` và `test_window_touch`: **15 test đạt**, 20,400 giây; exit 0. Bao gồm chọn/vùng cuộn log khi streaming, chuyển bốn sách, callback đến muộn, theme/ngôn ngữ và thao tác touch cửa sổ. `git diff --check` đạt. Không chạy lại toàn suite backend cho thay đổi chỉ gồm CSS và tài liệu này.
+
 ## Những việc cần nghiệm thu trên máy đích
 
 **Chưa kiểm chứng:** cửa sổ pywebview/WebView2 native, đăng nhập và dịch thật đồng thời qua ChatGPT/Gemini, CPU/RAM và chất lượng/tốc độ với bốn browser. Linux headless không thay thế các kiểm chứng này.
