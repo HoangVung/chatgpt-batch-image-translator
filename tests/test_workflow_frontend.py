@@ -69,8 +69,8 @@ class WorkflowFrontendTests(unittest.TestCase):
           }};
         """ % json.dumps(json.dumps(initial, ensure_ascii=False))
         self.page.add_init_script(bootstrap)
-        self.page.goto((PROJECT_ROOT / "ui/index.html").as_uri())
-        self.page.wait_for_selector("#tab-book-2")
+        self.page.goto(self.ui_url)
+        self.page.wait_for_selector("#tab-book-4")
 
     def tearDown(self):
         self.page.close()
@@ -155,7 +155,7 @@ class WorkflowFrontendTests(unittest.TestCase):
         page.evaluate("acceptSnapshot(state, {...state.controller, sequence:state.sequence + 1, log_history:''});")
         self.assertEqual(page.locator('#log').text_content(), '')
 
-    def test_sidebar_shows_both_books_and_background_account_switch(self):
+    def test_sidebar_shows_all_four_books_and_background_account_switch(self):
         page = self.page
         page.evaluate("""() => {
           for (const [id, target] of sessions) {
@@ -185,6 +185,12 @@ class WorkflowFrontendTests(unittest.TestCase):
         page.locator('#language').select_option('en')
         self.assertIn('Book 1', first.text_content())
         self.assertIn('Book 2', second.text_content())
+        for number in (3, 4):
+            row = page.locator(f'#service-book-{number}')
+            self.assertIn(f'Book {number}', row.text_content())
+            self.assertIn('Vung-Business', row.text_content())
+            page.evaluate(f"emitWorkflow('book-{number}','account_event',{{event:{{event:'account_switched',account_id:'personal'}}}})")
+            self.assertIn('Vung-Personal', row.text_content())
 
     def test_background_events_drafts_controls_and_keyboard_stay_with_book(self):
         page = self.page
@@ -252,21 +258,122 @@ class WorkflowFrontendTests(unittest.TestCase):
         page.wait_for_function("document.querySelector('#tab-book-1 strong').textContent==='Book 1'")
         page.locator("#tab-book-1").click()
         self.assertEqual(page.locator("#language").input_value(), "en")
-        for width, height in ((900, 620), (1180, 820), (1440, 1000)):
+        for width, height in ((900, 620), (1180, 820), (1440, 1000), (740, 820)):
             page.set_viewport_size({"width": width, "height": height})
             self.assertTrue(page.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth"))
-            self.assertTrue(page.evaluate("document.querySelector('#tab-book-1').getBoundingClientRect().right < document.querySelector('#tab-book-2').getBoundingClientRect().left"))
+            self.assertEqual(page.locator(".sidebar #workflow-tabs [role=tab]").count(), 4)
+            self.assertEqual(page.locator("#workflow-tabs").get_attribute("aria-orientation"), "vertical")
+            self.assertTrue(page.evaluate("""() => {
+              const boxes = [...document.querySelectorAll('#workflow-tabs .workflow-tab')].map(node => node.getBoundingClientRect());
+              return boxes.every((box, index) => box.width > 0 && box.height >= 44 &&
+                (!index || (Math.abs(box.left - boxes[index-1].left) < 1 && box.top >= boxes[index-1].bottom)));
+            }"""))
+            for number in range(1, 5):
+                page.locator(f"#tab-book-{number}").click()
+                self.assertEqual(page.locator("#active-book").text_content(), f"Book {number}")
+            page.locator("#language").scroll_into_view_if_needed()
+            self.assertTrue(page.locator("#language").is_visible())
         folder = os.environ.get("PARALLEL_SCREENSHOT_DIR")
         if folder:
             target = Path(folder)
             target.mkdir(parents=True, exist_ok=True)
             page.locator("#language").select_option("vi")
-            page.evaluate("emitWorkflow('book-1','process_started'); emitWorkflow('book-1','progress_changed',{done:3,total:10}); emitWorkflow('book-2','process_started'); emitWorkflow('book-2','progress_changed',{done:6,total:10});")
+            page.evaluate("""for (let number=1; number<=4; number++) {
+              emitWorkflow('book-'+number,'process_started');
+              emitWorkflow('book-'+number,'progress_changed',{done:number*2,total:10});
+              emitWorkflow('book-'+number,'folder_progress_changed',{done:number*7,total:100});
+            }""")
             page.set_viewport_size({"width": 1180, "height": 820})
-            page.screenshot(path=target / "two-tabs-dark.png", full_page=True, animations="disabled")
+            page.locator('#tab-book-1').click()
+            page.evaluate("document.querySelector('.sidebar').scrollTop=0; window.scrollTo(0,0)")
+            page.screenshot(path=target / "four-books-dark.png", full_page=True, animations="disabled")
             page.locator("#theme").select_option("light")
             page.set_viewport_size({"width": 900, "height": 620})
-            page.screenshot(path=target / "two-tabs-light-small.png", full_page=True, animations="disabled")
+            page.evaluate("document.querySelector('.sidebar').scrollTop=0; window.scrollTo(0,0)")
+            page.screenshot(path=target / "four-books-light-small.png", full_page=True, animations="disabled")
+
+    def test_four_running_books_keep_drafts_logs_progress_and_controls_separate(self):
+        page = self.page
+        for number in range(1, 5):
+            key = f'book-{number}'
+            page.locator(f'#tab-{key}').click()
+            page.locator('#source-folder').fill(f'D:/source-{number}')
+            page.locator('#output-folder').fill(f'D:/output-{number}')
+            page.locator('[data-mode="main"]').click()
+            page.wait_for_function(f"calls.some(c=>c[0]==='start_batch' && c[1]==='{key}')")
+            page.evaluate(f"""emitWorkflow('{key}','log_appended',{{text:'ONLY {key}'}});
+              emitWorkflow('{key}','progress_changed',{{done:{number},total:10}});
+              emitWorkflow('{key}','folder_progress_changed',{{done:{number*7},total:100}});""")
+        self.assertEqual(page.evaluate("calls.filter(c=>c[0]==='start_batch').map(c=>c[1])"),
+                         ['book-1', 'book-2', 'book-3', 'book-4'])
+        for number in range(1, 5):
+            key = f'book-{number}'
+            with self.subTest(key=key):
+                page.locator(f'#tab-{key}').click()
+                self.assertEqual(page.locator('#source-folder').input_value(), f'D:/source-{number}')
+                self.assertIn(f'ONLY {key}', page.locator('#log').text_content())
+                for other in range(1, 5):
+                    if other != number:
+                        self.assertNotIn(f'ONLY book-{other}', page.locator('#log').text_content())
+                self.assertIn(f'{number} / 10', page.locator('#progress-text').text_content())
+                self.assertTrue(page.locator('#source-folder').is_disabled())
+                page.evaluate(f"emitWorkflow('{key}','manual_action_required')")
+                self.assertTrue(page.locator('#manual-banner').is_visible())
+                page.locator('#continue').click()
+                page.wait_for_function(f"calls.some(c=>c[0]==='continue' && c[1]==='{key}')")
+        page.locator('#tab-book-3').click()
+        page.locator('#stop').click()
+        page.wait_for_function("calls.some(c=>c[0]==='stop_process' && c[1]==='book-3')")
+        self.assertFalse(page.locator('#source-folder').is_disabled())
+        for number in (1, 2, 4):
+            page.locator(f'#tab-book-{number}').click()
+            self.assertTrue(page.locator('#source-folder').is_disabled())
+            self.assertIn(f'ONLY book-{number}', page.locator('#log').text_content())
+
+    def test_new_books_keep_late_save_and_folder_response_with_origin(self):
+        page = self.page
+        page.locator('#tab-book-3').click()
+        page.locator('#source-folder').fill('D:/source-3')
+        page.locator('#output-folder').fill('D:/output-3')
+        page.evaluate("window.deferSave='book-3'")
+        page.locator('[data-mode="main"]').click()
+        page.wait_for_function("typeof finishSave === 'function'")
+        page.locator('#tab-book-4').click()
+        page.locator('#source-folder').fill('D:/draft-4')
+        page.evaluate("finishSave()")
+        page.wait_for_function("calls.some(c=>c[0]==='start_batch' && c[1]==='book-3')")
+        self.assertEqual(page.locator('#source-folder').input_value(), 'D:/draft-4')
+        self.assertEqual(page.locator('#tab-book-4').get_attribute('aria-selected'), 'true')
+        self.assertFalse(page.locator('#source-folder').is_disabled())
+        page.locator('[data-folder="output"]').click()
+        page.wait_for_function("typeof finishFolder === 'function'")
+        page.locator('#tab-book-1').click()
+        page.evaluate("finishFolder('D:/picked-4')")
+        page.wait_for_function("sessions.get('book-4').draft.download_folder==='D:/picked-4'")
+        self.assertEqual(page.locator('#output-folder').input_value(), 'D:/book-A/output')
+        page.locator('#tab-book-4').click()
+        self.assertEqual(page.locator('#output-folder').input_value(), 'D:/picked-4')
+        self.assertEqual(page.locator('#source-folder').input_value(), 'D:/draft-4')
+
+    def test_vertical_keyboard_wraps_and_sidebar_handles_long_account_names(self):
+        page = self.page
+        page.locator('#tab-book-1').focus()
+        for key, expected in (('ArrowUp', 4), ('ArrowDown', 1), ('End', 4),
+                              ('Home', 1), ('ArrowDown', 2), ('ArrowRight', 3), ('ArrowLeft', 2)):
+            page.keyboard.press(key)
+            self.assertEqual(page.evaluate('document.activeElement.id'), f'tab-book-{expected}')
+            self.assertEqual(page.locator(f'#tab-book-{expected}').get_attribute('aria-selected'), 'true')
+            self.assertEqual(page.locator('#workflow-panel').get_attribute('aria-labelledby'), f'tab-book-{expected}')
+        page.evaluate("""for (const [id, target] of sessions) {
+          target.settings.chatgpt_accounts[0].name = id + '-' + 'Tên tài khoản dài '.repeat(30);
+        } renderSession();""")
+        for width, height in ((900, 620), (1180, 820), (740, 820)):
+            page.set_viewport_size({'width': width, 'height': height})
+            self.assertTrue(page.evaluate('document.documentElement.scrollWidth <= document.documentElement.clientWidth'))
+            for number in range(1, 5):
+                caption = page.locator(f'#service-book-{number} .context-caption')
+                self.assertEqual(caption.get_attribute('title'), caption.text_content())
+                self.assertEqual(caption.evaluate('node=>getComputedStyle(node).textOverflow'), 'ellipsis')
 
 
 if __name__ == "__main__":

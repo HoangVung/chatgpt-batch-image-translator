@@ -40,7 +40,7 @@ class WindowTouchTests(unittest.TestCase):
                 minimize_window: () => { controls.push('minimize'); return ok(); }
             }};
         """ % json.dumps(initial))
-        page.goto((frontend.PROJECT_ROOT / "ui/index.html").as_uri())
+        page.goto(self.ui_url)
         page.wait_for_function("document.querySelector('#status').textContent === 'Sẵn sàng'")
         cdp = page.context.new_cdp_session(page)
 

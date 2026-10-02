@@ -237,7 +237,7 @@ class LauncherTests(unittest.TestCase):
 
         with (
             patch.object(sys, "platform", "win32"),
-            patch.object(ctypes.windll, "user32", mock_user32, create=True),
+            patch.object(ctypes, "windll", SimpleNamespace(user32=mock_user32), create=True),
         ):
             # Target as int
             result = enable_windows_taskbar_minimize(1001)

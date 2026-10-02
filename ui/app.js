@@ -78,6 +78,7 @@ function renderServiceContexts() {
 function renderTabs() {
   renderServiceContexts();
   const container = $("#workflow-tabs");
+  container.closest(".sidebar-books").hidden = !multiSession;
   container.classList.toggle("hidden", !multiSession);
   container.setAttribute("aria-label", t("workflow_tabs"));
   sessions.forEach((target, id) => {
@@ -92,10 +93,11 @@ function renderTabs() {
       button.append(document.createElement("strong"), document.createElement("small"), document.createElement("small"));
       button.addEventListener("click", () => switchSession(id));
       button.addEventListener("keydown", (event) => {
-        if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+        if (!["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
         event.preventDefault();
         const ids = [...sessions.keys()];
-        const next = event.key === "Home" ? ids[0] : event.key === "End" ? ids.at(-1) : ids[(ids.indexOf(id) + (event.key === "ArrowRight" ? 1 : ids.length - 1)) % ids.length];
+        const forward = event.key === "ArrowRight" || event.key === "ArrowDown";
+        const next = event.key === "Home" ? ids[0] : event.key === "End" ? ids.at(-1) : ids[(ids.indexOf(id) + (forward ? 1 : ids.length - 1)) % ids.length];
         switchSession(next);
         document.getElementById(`tab-${next}`).focus();
       });
@@ -752,4 +754,3 @@ window.addEventListener("pywebviewready", () => {
   zoom.setAttribute("aria-label", "Maximize window");
   zoom.title = "Phóng to";
 });
-

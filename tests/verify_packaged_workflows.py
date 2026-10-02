@@ -13,6 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from desktop.runtime import build_process_launch, make_default_settings, write_launch_snapshot
 from resource_guard import ResourceLease, workflow_resources
+from desktop.workflow_sessions import WORKFLOW_IDS
 
 
 def verify(executable):
@@ -23,7 +24,7 @@ def verify(executable):
         base = Path(directory)
         processes = []
         try:
-            for name in ("book-A", "book-B"):
+            for name in WORKFLOW_IDS:
                 settings = make_default_settings(base / name)
                 source = Path(settings["image_folder"])
                 source.mkdir(parents=True)
@@ -71,7 +72,7 @@ def verify(executable):
                     if stream and not stream.closed:
                         stream.close()
     print(json.dumps({"workers": results, "rejected": rejected}, ensure_ascii=False, indent=2))
-    assert len(results) == 2 and all(
+    assert len(results) == len(WORKFLOW_IDS) and all(
         item["exit_code"] == 0 and item["progress_exists"] and item["ownership_exists"] and item["result_protocol"]
         for item in results), "Frozen workers must deliver isolated outputs AND their completion protocol"
 

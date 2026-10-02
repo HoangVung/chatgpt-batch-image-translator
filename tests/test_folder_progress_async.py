@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from desktop.workflow_sessions import SessionManager
+from desktop.workflow_sessions import SessionManager, WORKFLOW_IDS
 
 
 class AsyncFolderProgressTests(unittest.TestCase):
@@ -31,10 +31,11 @@ class AsyncFolderProgressTests(unittest.TestCase):
                     self.assertTrue(entered.wait(2))
                     self.assertTrue(returned.wait(1), "startup is waiting on the drive")
                     data = result["data"]
-                    self.assertEqual(set(data["sessions"]), {"book-1", "book-2"})
+                    self.assertEqual(tuple(data["sessions"]), WORKFLOW_IDS)
                     self.assertEqual(data["settings"]["language"], "vi")
                     self.assertEqual(data["controller"]["folder_progress"], {"done": None, "total": None})
-                    self.assertTrue(manager._invoke("get_initial_state", session_id="book-2")["ok"])
+                    for key in WORKFLOW_IDS[1:]:
+                        self.assertTrue(manager._invoke("get_initial_state", session_id=key)["ok"])
                     scan = first._folder_progress_thread
                     # Repeated snapshots must not create extra blocked scans.
                     manager._invoke("get_initial_state")

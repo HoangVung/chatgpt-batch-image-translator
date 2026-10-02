@@ -11,7 +11,7 @@
 ## Tính năng
 
 - Chọn thư mục ảnh gốc và thư mục lưu ảnh đã Việt hóa.
-- Hai tab **Sách 1 / Sách 2** trong giao diện Liquid Glass để chạy hai sách song song, với cấu hình, tài khoản, tiến trình và log riêng.
+- Bốn sách **Sách 1 / Sách 2 / Sách 3 / Sách 4** ở sidebar trái trong giao diện Liquid Glass, chạy song song với cấu hình, tài khoản, tiến trình và log riêng.
 - Hỗ trợ 2 dịch vụ AI: **ChatGPT** và **Google Gemini** với profile trình duyệt riêng biệt.
 - Quản lý nhiều tài khoản ChatGPT ngay trong app: thêm, đổi tên, chọn nhanh profile và mở phiên đăng nhập riêng cho từng tài khoản.
 - Chạy theo batch, lưu tiến trình chi tiết vào `progress.csv`.
@@ -26,19 +26,19 @@
 - Bộ kiểm thử tự động tích hợp trong thư mục `tests/`.
 - Hỗ trợ build portable trên Windows và `.app` trên macOS.
 
-## Dịch hai sách song song
+## Dịch bốn sách song song
 
-1. Mở lại app từ mã nguồn đã cập nhật hoặc bản EXE được build từ mã nguồn này. Giao diện Liquid Glass có hai tab **Sách 1** và **Sách 2**; Tk dự phòng vẫn chạy một phiên.
-2. **Sách 1** giữ cấu hình hiện có. Sang **Sách 2**, chọn nguồn và thư mục kết quả của sách thứ hai, rồi đăng nhập bằng profile riêng của tab này. Chuyển tab không dừng tác vụ đang chạy.
-3. Hai thư mục kết quả phải riêng biệt, không lồng nhau và không chồng lên nguồn hoặc profile. Các nhóm profile cũng phải tách biệt, kể cả tài khoản dự phòng. App sẽ chặn cấu hình xung đột.
+1. Mở lại app từ mã nguồn đã cập nhật hoặc bản EXE được build từ mã nguồn này. Giao diện Liquid Glass có **Sách 1–4** ở sidebar trái; Tk dự phòng vẫn chạy một phiên.
+2. **Sách 1/Sách 2** giữ cấu hình và đường dẫn dữ liệu hiện có. **Sách 3/Sách 4** có nguồn/kết quả trống để chọn sách mới; đăng nhập bằng profile riêng của từng sách. Chuyển sách không dừng tác vụ đang chạy. Có thể chọn sách bằng phím lên/xuống, Home/End.
+3. Bốn thư mục kết quả phải riêng biệt, không lồng nhau và không chồng lên nguồn hoặc profile. Các nhóm profile cũng phải tách biệt, kể cả tài khoản dự phòng. App sẽ chặn cấu hình xung đột.
 4. Nếu dùng thư mục kết quả đã có từ phiên bản cũ, kiểm tra đúng nguồn sách rồi bấm **Xác nhận kết quả cũ** một lần. App chỉ thêm `workflow_output.json` để ghi nhận nguồn; ảnh và `progress.csv` hiện có được giữ nguyên. Không xác nhận nếu kết quả thuộc sách khác.
-5. Bấm chạy trên từng tab. Dừng, tiếp tục, retry, tự chạy batch tiếp theo và xuất log áp dụng cho tab đang chọn; tab nền vẫn hiển thị tiến độ hoặc trạng thái cần thao tác.
+5. Bấm chạy trên từng sách. Dừng, tiếp tục, retry, tự chạy batch tiếp theo và xuất log áp dụng cho sách đang chọn; sidebar vẫn hiển thị tiến độ hoặc trạng thái cần thao tác của các sách nền.
 
-Cấu hình tab 1 nằm ở `app_settings.json`; tab 2 nằm ở `workflows/book-2/app_settings.json` trong thư mục dữ liệu app. Mỗi worker nhận bản chụp cấu hình riêng khi khởi động. Không sao chép profile đang mở sang tab khác.
+Cấu hình Sách 1 nằm ở `app_settings.json`; Sách 2/3/4 lần lượt nằm ở `workflows/book-2/app_settings.json`, `workflows/book-3/app_settings.json`, `workflows/book-4/app_settings.json` trong thư mục dữ liệu app. Mỗi worker nhận bản chụp cấu hình riêng khi khởi động. Không sao chép profile đang mở sang sách khác.
 
-Khóa tài nguyên phối hợp giữa các tiến trình của phiên bản mới trên cùng máy và cùng người dùng hệ điều hành. Khóa này không phối hợp giữa nhiều máy qua Google Drive và không chặn công cụ ngoài hoặc phiên bản cũ ghi vào output. Hai profile đăng nhập cùng một tài khoản vẫn có thể chịu hạn mức chung. Chất lượng AI và tốc độ thực tế cần kiểm tra với sách của bạn.
+Khóa tài nguyên phối hợp giữa các tiến trình của phiên bản mới trên cùng máy và cùng người dùng hệ điều hành. Khóa này không phối hợp giữa nhiều máy qua Google Drive và không chặn công cụ ngoài hoặc phiên bản cũ ghi vào output. Các profile đăng nhập cùng một tài khoản vẫn có thể chịu hạn mức chung. Bốn browser dùng chung CPU/RAM/mạng của máy; chất lượng AI và tốc độ thực tế cần kiểm tra với sách của bạn.
 
-Chi tiết triển khai, bằng chứng kiểm thử và các mục cần thử thủ công: [Kiểm chứng hai workflow](docs/PARALLEL_WORKFLOW_TABS_VERIFICATION.vi.md).
+Chi tiết triển khai, bằng chứng kiểm thử và các mục cần thử thủ công: [Kiểm chứng bốn workflow](docs/FOUR_BOOK_WORKFLOWS_VERIFICATION.vi.md). [Kế hoạch triển khai](docs/FOUR_BOOK_WORKFLOWS_SIDEBAR_PLAN.vi.md) ghi lại khảo sát và phạm vi thay đổi.
 
 ## Quy ước định dạng tên file
 
@@ -217,7 +217,7 @@ Desktop app for batch-processing book/comic images with ChatGPT or Google Gemini
 ## Features
 
 - Select input and output image folders.
-- Two **Book 1 / Book 2** tabs in the Liquid Glass interface, with independent settings, accounts, progress, and logs.
+- Four **Book 1 / Book 2 / Book 3 / Book 4** workflows in the left sidebar, with independent settings, accounts, progress, and logs.
 - Supports two AI services: **ChatGPT** and **Google Gemini** with isolated browser profiles.
 - Manages multiple ChatGPT accounts in the app: add, rename, quickly select profiles, and open an independent sign-in session for each account.
 - Run images in batches and track progress in `progress.csv`.
@@ -232,13 +232,15 @@ Desktop app for batch-processing book/comic images with ChatGPT or Google Gemini
 - Automated test suite included in `tests/`.
 - Supports Windows portable builds and macOS `.app` builds.
 
-## Translate Two Books in Parallel
+## Translate Four Books in Parallel
 
-Open the updated source app or a rebuilt EXE. **Book 1** retains the existing settings; configure **Book 2** with its own input, output and browser profiles, then start each tab. Switching tabs keeps background work running. Stop, continue, retry and automatic batch chaining apply independently.
+Open the updated source app or a rebuilt EXE. Select **Book 1–4** in the left sidebar using the mouse or Up/Down and Home/End keys. **Book 1/Book 2** retain their existing settings and data locations. Configure the new **Book 3/Book 4** with their own inputs, outputs and browser profiles, then start each book. Switching books keeps background work running. Stop, continue, retry and automatic batch chaining apply independently.
 
-Output folders must be separate and must not overlap inputs or profiles. Both profile groups, including fallback accounts, must be disjoint. To reuse an older output folder, verify the selected book and click **Confirm existing output** once. This adds `workflow_output.json` without rewriting existing images or `progress.csv`.
+Output folders must be separate and must not overlap inputs or profiles. All four profile groups, including fallback accounts, must be disjoint. To reuse an older output folder, verify the selected book and click **Confirm existing output** once. This adds `workflow_output.json` without rewriting existing images or `progress.csv`.
 
-Book 2 stores settings under `workflows/book-2/app_settings.json`. Each worker receives a separate launch snapshot. Resource locks coordinate current-version processes on the same computer and OS user; they do not coordinate cloud-synced folders across machines or older/external writers. Separate browser profiles do not provide separate service quotas when signed into the same account. The legacy Tk shell remains single-session.
+Book 1 keeps `app_settings.json`; Books 2–4 store settings under their respective `workflows/book-N/app_settings.json` directories. Each worker receives a separate launch snapshot. Resource locks coordinate current-version processes on the same computer and OS user; they do not coordinate cloud-synced folders across machines or older/external writers. Separate browser profiles do not provide separate service quotas when signed into the same account. Four browsers share the computer's CPU, RAM and network. The legacy Tk shell remains single-session.
+
+Implementation and verification: [Four-workflow verification](docs/FOUR_BOOK_WORKFLOWS_VERIFICATION.vi.md).
 
 ## File Naming Convention
 

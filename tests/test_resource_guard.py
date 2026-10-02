@@ -98,6 +98,43 @@ class GuardTests(unittest.TestCase):
         with self.assertRaises(ResourceConflict):
             validate_output_names([Path("1_1.jpg"), Path("01_01.png")], lambda p: "00001_00001VN.png")
 
+    def test_four_real_workers_survive_one_kill_and_keep_resources_isolated(self):
+        settings = [self.config(key) for key in ("A", "B", "C", "D")]
+        for cfg, color in zip(settings, ("red", "blue", "green", "yellow")):
+            Image.new("RGB", (16, 16), color).save(Path(cfg["image_folder"]) / "1_1.jpg")
+        processes = [self.spawn(cfg) for cfg in settings]
+        for process in processes:
+            self.ready(process)
+        self.assertEqual(len({process.pid for process in processes}), 4)
+        self.assertTrue(all(process.poll() is None for process in processes))
+        outputs = [Path(cfg["download_folder"]) / "00001_00001VN.png" for cfg in settings]
+        hashes = [hashlib.sha256(path.read_bytes()).hexdigest() for path in outputs]
+        self.assertEqual(len(set(hashes)), 4)
+        for cfg in settings:
+            output = Path(cfg["download_folder"])
+            checkpoint = json.loads((output / "job_checkpoint.json").read_text(encoding="utf-8"))
+            self.assertEqual(canonical_path(checkpoint["output_folder"]), canonical_path(output))
+            self.assertEqual(checkpoint["active_account"]["profile_dir"], cfg["profile_dir"])
+            self.assertIn("1_1.jpg", (output / "progress.csv").read_text(encoding="utf-8-sig"))
+            ownership = json.loads((output / "workflow_output.json").read_text(encoding="utf-8"))
+            self.assertEqual(canonical_path(ownership["source_folder"]), canonical_path(cfg["image_folder"]))
+        # Kill the newly added Book 3; the other three remain alive and locked.
+        processes[2].kill()
+        processes[2].wait(timeout=10)
+        for index in (0, 1, 3):
+            self.assertIsNone(processes[index].poll())
+            self.assertEqual(hashlib.sha256(outputs[index].read_bytes()).hexdigest(), hashes[index])
+            duplicate = self.spawn(settings[index])
+            _, error = duplicate.communicate(timeout=20)
+            self.assertNotEqual(duplicate.returncode, 0)
+            self.assertIn("Folder conflict", error)
+        replacement = self.spawn(settings[2])
+        self.ready(replacement)
+        self.assertEqual(hashlib.sha256(outputs[2].read_bytes()).hexdigest(), hashes[2])
+        for process in (processes[0], processes[1], replacement, processes[3]):
+            process.communicate("\n", timeout=20)
+            self.assertEqual(process.returncode, 0)
+
     def test_aliases_and_fallback_pool_are_exclusive(self):
         cfg = self.config("A")
         cfg["chatgpt_accounts"].append({"id": "fallback", "name": "fallback", "profile_dir": str(self.root / "fallback")})

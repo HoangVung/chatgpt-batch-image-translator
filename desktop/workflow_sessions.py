@@ -1,4 +1,4 @@
-"""Two independent desktop workflows sharing only window chrome and preferences."""
+"""Independent book workflows sharing only window chrome and preferences."""
 from __future__ import annotations
 
 import threading
@@ -10,6 +10,8 @@ from desktop.web_api import WebApi, success, failure
 from resource_guard import (ResourceConflict, ResourceLease, canonical_path, claim_output,
                             configured_profiles, validate_resources, workflow_resources)
 
+
+WORKFLOW_IDS = ("book-1", "book-2", "book-3", "book-4")
 
 SESSION_METHODS = frozenset({
     "get_initial_state", "save_settings", "choose_folder", "start_batch", "stop_process",
@@ -29,20 +31,23 @@ class SessionManager:
         self._lock = threading.RLock()
         self._closed = False
         self.sessions = {}
-        for session_id, directory in (("book-1", self.data_dir), ("book-2", self.data_dir / "workflows" / "book-2")):
+        for session_id in WORKFLOW_IDS:
+            directory = self.data_dir if session_id == "book-1" else self.data_dir / "workflows" / session_id
             api = api_factory(app_dir=self.app_dir, data_dir=directory, session_id=session_id)
             api.controller._lock = self._lock
             api._dispatch_lock = self._lock
             api._launch_validator = self._prepare_start
             self.sessions[session_id] = api
-        first, second = self.sessions.values()
-        if not second.settings_path.exists():
-            for key in ("service", "batch_size", "auto_next_enabled", "auto_next_delay_minutes", "auto_account_fallback_enabled"):
-                second.settings[key] = deepcopy(first.settings[key])
-            second.settings.update(image_folder="", download_folder="", start_from="")
-            second._configure_controller()
-        for key in ("language", "theme"):
-            second.settings[key] = first.settings[key]
+        first = self.sessions["book-1"]
+        for session_id in WORKFLOW_IDS[1:]:
+            other = self.sessions[session_id]
+            if not other.settings_path.exists():
+                for key in ("service", "batch_size", "auto_next_enabled", "auto_next_delay_minutes", "auto_account_fallback_enabled"):
+                    other.settings[key] = deepcopy(first.settings[key])
+                other.settings.update(image_folder="", download_folder="", start_from="")
+                other._configure_controller()
+            for key in ("language", "theme"):
+                other.settings[key] = first.settings[key]
 
     @staticmethod
     def _configured_resources(settings):
@@ -83,7 +88,7 @@ class SessionManager:
             return failure("Unknown workflow session")
         api = self.sessions[session_id or "book-1"]
         # A native dialog may remain open for minutes. It must not stop the
-        # second worker's event draining or timer callbacks.
+        # other workers' event draining or timer callbacks.
         if method == "choose_folder":
             return api.choose_folder(*args)
         if method in {"minimize_window", "toggle_maximize_window", "close_window", "move_window"}:

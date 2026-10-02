@@ -10,7 +10,7 @@ if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from desktop.web_api import WebApi
-from desktop.workflow_sessions import SessionManager
+from desktop.workflow_sessions import SessionManager, WORKFLOW_IDS
 from desktop.window_identity import (
     enable_windows_taskbar_minimize,
     set_windows_app_user_model_id,
@@ -146,7 +146,7 @@ def run_self_test() -> int:
         initial = api._invoke("get_initial_state")
         checks = {
             "controller": all(item.controller.__class__.__name__ == "DesktopController" for item in api.sessions.values()),
-            "two_sessions": len(initial.get("data", {}).get("sessions", {})) == 2,
+            "four_sessions": tuple(initial.get("data", {}).get("sessions", {})) == WORKFLOW_IDS,
             "initial_state": initial.get("ok") is True,
             "local_assets": all((RESOURCE_ROOT / "ui" / name).is_file() for name in ("index.html", "styles.css", "app.js")),
             "default_shell_untouched": (api.app_dir / "app.pyw").is_file() or bool(getattr(sys, "frozen", False)),

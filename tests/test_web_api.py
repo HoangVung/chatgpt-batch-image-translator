@@ -353,11 +353,24 @@ class WebApiTests(unittest.TestCase):
     def test_open_output_creates_configured_folder_and_uses_native_shell(self):
         output = self.data_dir / "new-output"
         self.api.settings["download_folder"] = str(output)
-        with patch("desktop.web_api.os.startfile", create=True) as startfile:
+        with patch("desktop.web_api.os") as windows_os:
+            windows_os.name = "nt"
             response = self.api.open_output_folder()
         self.assertTrue(response["ok"])
         self.assertTrue(output.is_dir())
-        startfile.assert_called_once_with(output)
+        windows_os.startfile.assert_called_once_with(output)
+
+    def test_open_output_uses_macos_or_linux_shell_without_launching_it(self):
+        output = self.data_dir / "new-output"
+        self.api.settings["download_folder"] = str(output)
+        for platform, command in (("darwin", "open"), ("linux", "xdg-open")):
+            with self.subTest(platform=platform), patch("desktop.web_api.os") as posix_os, \
+                    patch("desktop.web_api.sys.platform", platform), patch("desktop.web_api.subprocess.Popen") as popen:
+                posix_os.name = "posix"
+                response = self.api.open_output_folder()
+                self.assertTrue(response["ok"], response)
+                self.assertTrue(output.is_dir())
+                popen.assert_called_once_with([command, str(output)])
 
     def test_static_frontend_is_local_vanilla_and_calls_narrow_bridge(self):
         html = (PROJECT_ROOT / "ui" / "index.html").read_text(encoding="utf-8")
