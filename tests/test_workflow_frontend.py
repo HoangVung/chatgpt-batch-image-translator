@@ -139,6 +139,44 @@ class WorkflowFrontendTests(unittest.TestCase):
         self.assertIn('10 / 10 (100%)', page.locator('#progress-text').text_content())
         self.assertIn('10/10', page.locator('#tab-book-1').text_content())
 
+    def test_repeated_status_events_do_not_rewrite_unchanged_controls(self):
+        page = self.page
+        for phase in ('idle', 'running', 'countdown'):
+            with self.subTest(phase=phase):
+                changes = page.evaluate("""phase => {
+                  state.controller.running = phase === 'running';
+                  state.controller.auto_next_active = phase === 'countdown';
+                  renderController();
+                  const observer = new MutationObserver(() => {});
+                  observer.observe(document.body, {subtree:true, attributes:true,
+                    childList:true, characterData:true});
+                  for (let i = 0; i < 10; i++) {
+                    emitWorkflow('book-1', 'progress_changed', {done:0,total:0});
+                    emitWorkflow('book-1', 'auto_next_tick', {remaining:0});
+                    emitWorkflow('book-2', 'folder_progress_changed', {});
+                  }
+                  const changes = observer.takeRecords().map(item =>
+                    `${item.target.id || item.target.className}:${item.attributeName || item.type}`);
+                  observer.disconnect();
+                  return changes;
+                }""", phase)
+                self.assertEqual(changes, [])
+                self.assertEqual(page.locator('#confirm-output').is_disabled(), phase != 'idle')
+
+    def test_snapshot_refresh_keeps_account_options_and_input_selection(self):
+        page = self.page
+        page.locator('#account-name').fill('Unsaved account name')
+        page.evaluate("""() => {
+          const input = document.querySelector('#account-name');
+          input.setSelectionRange(2, 8);
+          captureDraft();
+          window.accountOption = document.querySelector('#account-select').firstChild;
+        }""")
+        page.evaluate('refreshSession(state)')
+        self.assertTrue(page.evaluate("document.querySelector('#account-select').firstChild === accountOption"))
+        self.assertEqual(page.locator('#account-name').input_value(), 'Unsaved account name')
+        self.assertEqual(page.evaluate("[document.querySelector('#account-name').selectionStart, document.querySelector('#account-name').selectionEnd]"), [2, 8])
+
     def test_snapshot_ahead_of_log_events_does_not_drop_or_duplicate_output(self):
         page = self.page
         page.evaluate("""() => {

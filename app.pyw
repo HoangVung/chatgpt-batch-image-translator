@@ -2238,7 +2238,11 @@ class ChatGPTBatchApp:
     def render_account_event(self, event):
         event_name = event.get("event")
         if event_name == "account_quota_exhausted":
-            self.log("\n" + self.t("account_quota_log", name=event.get("account_name", "ChatGPT")) + "\n")
+            message = self.t("account_quota_log", name=event.get("account_name", "ChatGPT"))
+            evidence = str(event.get("evidence") or "").strip()
+            if evidence:
+                message += "\n  ChatGPT: " + evidence
+            self.log("\n" + message + "\n")
         elif event_name == "account_switched":
             self.set_worker_active_account(event.get("account_id"))
             self.log("\n" + self.t(

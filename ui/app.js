@@ -15,6 +15,15 @@ function setText(node, text) {
   if (node.textContent !== text) node.textContent = text;
 }
 
+function setProperty(node, name, value) {
+  if (node[name] !== value) node[name] = value;
+}
+
+function setAttribute(node, name, value) {
+  const text = String(value);
+  if (node.getAttribute(name) !== text) node.setAttribute(name, text);
+}
+
 async function api(method, ...args) {
   const fn = window.pywebview?.api?.[method];
   if (!fn) throw new Error("pywebview API is not ready");
@@ -67,11 +76,11 @@ function renderServiceContexts() {
     const serviceName = settings.service === "gemini" ? "Google Gemini" : "ChatGPT";
     const accountName = settings.service === "gemini" ? "Google Gemini" : account?.name || "—";
     setText(row.querySelector(".context-book"), t("book_tab", {number: id.split("-").at(-1)}));
-    row.querySelector(".context-book").hidden = !multiSession;
+    setProperty(row.querySelector(".context-book"), "hidden", !multiSession);
     setText(row.querySelector(".context-service"), serviceName);
     setText(row.querySelector(".context-caption"), accountName);
-    row.querySelector(".context-caption").title = accountName;
-    row.dataset.active = String(target === state);
+    setProperty(row.querySelector(".context-caption"), "title", accountName);
+    setAttribute(row, "data-active", target === state);
   });
 }
 
@@ -79,7 +88,7 @@ function renderTabs() {
   renderServiceContexts();
   const container = $("#workflow-tabs");
   container.classList.toggle("hidden", !multiSession);
-  container.setAttribute("aria-label", t("workflow_tabs"));
+  setAttribute(container, "aria-label", t("workflow_tabs"));
   sessions.forEach((target, id) => {
     let button = document.getElementById(`tab-${id}`);
     if (!button) {
@@ -110,12 +119,12 @@ function renderTabs() {
     const folderStatus = t("tab_folder_progress", {done: folder.done ?? "—", total: folder.total ?? "—"});
     setText(button.children[1], status);
     setText(button.lastElementChild, folderStatus);
-    button.title = `${label}: ${status}\n${folderStatus}\n${target.settings.image_folder || ""}`;
-    button.setAttribute("aria-selected", String(target === state));
-    button.tabIndex = target === state ? 0 : -1;
-    button.dataset.attention = String(attention);
+    setProperty(button, "title", `${label}: ${status}\n${folderStatus}\n${target.settings.image_folder || ""}`);
+    setAttribute(button, "aria-selected", target === state);
+    setProperty(button, "tabIndex", target === state ? 0 : -1);
+    setAttribute(button, "data-attention", attention);
   });
-  if (state.id) $("#workflow-panel").setAttribute("aria-labelledby", `tab-${state.id}`);
+  if (state.id) setAttribute($("#workflow-panel"), "aria-labelledby", `tab-${state.id}`);
 }
 
 function renderSession() {
@@ -165,9 +174,14 @@ async function refreshSession(target) {
   try {
     const initial = await sessionApi(target, "get_initial_state");
     if ((initial.controller.sequence || 0) >= target.sequence) {
+      const settingsChanged = JSON.stringify(target.settings) !== JSON.stringify(initial.settings);
       target.settings = initial.settings;
       acceptSnapshot(target, initial.controller);
-      if (target === state) renderSession();
+      if (target === state) {
+        // Resync controller state without rebuilding the form or its selections.
+        if (settingsChanged) renderSettings();
+        else renderController();
+      }
     }
   } catch (error) { showError(error, target); }
   finally { target.refreshing = false; renderTabs(); }
@@ -318,28 +332,28 @@ function renderController() {
   const remaining = state.remaining || 0;
   const time = `${String(Math.floor(remaining / 60)).padStart(2, "0")}:${String(remaining % 60).padStart(2, "0")}`;
   setText($("#countdown"), controller.status?.key === "auto_countdown" ? t("auto_countdown", controller.status.params) : t("auto_countdown", {time}));
-  $("#confirm-output").disabled = running || autoNext || launchPending;
-  $$('#configuration-card input, #configuration-card select, #configuration-card button').forEach((node) => { node.disabled = running || launchPending; });
-  $("#confirm-output").disabled = running || autoNext || launchPending;
+  $$('#configuration-card input, #configuration-card select, #configuration-card button').forEach((node) => {
+    setProperty(node, "disabled", running || launchPending || (node.id === "confirm-output" && autoNext));
+  });
 
   document.body.classList.toggle("is-running", running);
-  $("#progress").value = percent;
-  $("#progress").setAttribute("aria-valuetext", `${done} / ${total} (${Math.round(percent)}%)`);
+  setProperty($("#progress"), "value", percent);
+  setAttribute($("#progress"), "aria-valuetext", `${done} / ${total} (${Math.round(percent)}%)`);
   setText($("#progress-text"), `${done} / ${total} (${Math.round(percent)}%)`);
   $("#manual-banner").classList.toggle("hidden", !manual);
-  $("#continue").disabled = !manual;
-  $("#stop").disabled = !running && !autoNext;
-  $$('[data-mode]').forEach((button) => { button.disabled = running || launchPending; });
+  setProperty($("#continue"), "disabled", !manual);
+  setProperty($("#stop"), "disabled", !running && !autoNext);
+  $$('[data-mode]').forEach((button) => { setProperty(button, "disabled", running || launchPending); });
   ["account-select", "account-name", "account-add", "account-rename", "account-remove", "account-login"].forEach((id) => {
-    $(`#${id}`).disabled = running || launchPending;
+    setProperty($(`#${id}`), "disabled", running || launchPending);
   });
 
   const runCopy = $("#run-indicator span:last-child");
   setText(runCopy, manual ? t("tab_attention") : running ? t("status_running") : autoNext ? t("tab_waiting") : t(controller.status?.key || "ready", controller.status?.params));
   $("#run-indicator").classList.toggle("active", running);
-  $("#run-indicator").title = t(controller.status?.key || "ready", controller.status?.params);
+  setProperty($("#run-indicator"), "title", t(controller.status?.key || "ready", controller.status?.params));
   const statusEl = $("#status");
-  if (statusEl) statusEl.dataset.state = manual ? "warning" : running ? "running" : "idle";
+  if (statusEl) setAttribute(statusEl, "data-state", manual ? "warning" : running ? "running" : "idle");
   renderStatus();
   renderTabs();
 }
@@ -422,6 +436,7 @@ async function initialize() {
         sequence: item.controller.sequence || 0, initialized: true, launchPending: false});
     });
     state = sessions.get(initial.active_session_id || "book-1");
+    document.body.classList.toggle("windows-webview", initial.capabilities.platform === "windows");
     $("#backend").textContent = initial.capabilities.webview_backend;
     renderSession();
     bind();

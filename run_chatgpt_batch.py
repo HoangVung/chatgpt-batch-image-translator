@@ -1671,15 +1671,35 @@ def get_generation_notice_texts(page, before_signature=None):
 
 
 def get_generation_quota_evidence(page, before_signature=None):
-    """Return a direct quota phrase only from a newly changed response."""
+    """Keep the quota notice and its follow-up text, including reset timing."""
     if before_signature is not None and not has_new_assistant_response(page, before_signature):
         return None
 
-    for text in get_generation_notice_texts(page, before_signature):
+    texts = get_generation_notice_texts(page, before_signature)
+    for index, text in enumerate(texts):
         marker = find_image_quota_marker(text)
         if marker:
+            if before_signature is not None:
+                return "\n".join(str(part).strip() for part in texts[index:])
             return str(text).strip()
     return None
+
+
+def raise_image_quota_error(page, evidence, before_signature):
+    """Allow a short bounded wait for the reset sentence to finish streaming."""
+    unchanged = 0
+    for _ in range(10):
+        sleep(1)
+        current = get_generation_quota_evidence(page, before_signature)
+        if current:
+            unchanged = unchanged + 1 if current == evidence else 0
+            evidence = current
+            if unchanged >= 2 and not is_generating(page):
+                break
+        else:
+            unchanged = 0
+    print("⚠ ChatGPT báo đã hết lượt tạo ảnh")
+    raise QuotaExhaustedError(evidence)
 
 
 def log_response_wait_diagnostics(before_signature, current_signature):
@@ -1994,8 +2014,7 @@ def wait_image_generation_finished_or_image_ready(
 
         quota_evidence = get_generation_quota_evidence(page, before_signature)
         if quota_evidence and not candidate_url:
-            print("⚠ ChatGPT báo đã hết lượt tạo ảnh")
-            raise QuotaExhaustedError(quota_evidence)
+            raise_image_quota_error(page, quota_evidence, before_signature)
 
         elapsed = int(time.time() - start)
 
@@ -2047,8 +2066,7 @@ def try_create_image(page, old_imgs):
             wait_if_cloudflare(page)
             quota_evidence = get_generation_quota_evidence(page, before_response)
             if quota_evidence:
-                print("⚠ ChatGPT báo đã hết lượt tạo ảnh")
-                raise QuotaExhaustedError(quota_evidence)
+                raise_image_quota_error(page, quota_evidence, before_response)
             if is_generating(page):
                 started = True
                 break
@@ -2520,12 +2538,12 @@ def main():
                                 account_id=current_account["id"],
                                 account_name=current_account["name"],
                                 image=img.name,
-                                evidence=quota_error.evidence[:500],
+                                evidence=quota_error.evidence,
                             )
                             account_states[current_account["id"]] = {
                                 "name": current_account["name"],
                                 "state": "quota_exhausted",
-                                "evidence": quota_error.evidence[:500],
+                                "evidence": quota_error.evidence,
                             }
                             write_job_checkpoint(
                                 job_id=job_id,

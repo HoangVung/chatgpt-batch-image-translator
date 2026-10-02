@@ -1448,6 +1448,22 @@ select {
 body.no-custom-chrome .titlebar { display: none; }
 body.no-custom-chrome { padding-top: 0; }
 
+/* Keep native Windows panels on ordinary painted surfaces. Stacked backdrop
+   filters and large blurred layers can flicker in the WebView2 compositor even
+   while the DOM is idle. The browser/macOS presentation remains unchanged. */
+body.windows-webview { --native-panel: #fafcff; }
+:root[data-theme="dark"] body.windows-webview { --native-panel: #1f2837; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) body.windows-webview { --native-panel: #1f2837; }
+}
+body.windows-webview .ambient { display: none; }
+body.windows-webview .glass,
+body.windows-webview .titlebar {
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  background: var(--native-panel);
+}
+
 /* A compact, centered command island stays within reach while the page scrolls. */
 .visually-hidden {
   position: absolute;

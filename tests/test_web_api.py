@@ -337,6 +337,36 @@ class WebApiTests(unittest.TestCase):
         self.assertIn("quota", "".join(self.api.controller.log_history))
         self.assertEqual(self.api.status, {"key": "needs_retry_outcome", "params": {"failed": 3}})
 
+    def test_quota_worker_event_logs_full_message_and_reset_time(self):
+        for language, notice in (
+            ("vi", "Bạn hiện đã hết lượt tạo ảnh.\n" + "Thông báo bổ sung. " * 40
+             + "Bạn có thể tạo thêm ảnh sau 5 giờ."),
+            ("en", "You've reached the image generation limit.\n"
+             "You can create more images when the limit resets in 3 hours."),
+        ):
+            with self.subTest(language=language):
+                self.api.settings["language"] = language
+                self.api.controller.clear_log()
+                self.api.controller.handle_worker_output("__ACCOUNT_EVENT__=" + json.dumps({
+                    "event": "account_quota_exhausted", "account_name": "Account One",
+                    "evidence": notice,
+                }, ensure_ascii=False) + "\n")
+                self.api._dispatch_once()
+                log = "".join(self.api.controller.log_history)
+                self.assertIn("Account One", log)
+                self.assertIn("ChatGPT: " + notice, log)
+                self.assertEqual(log.count(notice), 1)
+                self.assertNotIn("__ACCOUNT_EVENT__=", log)
+
+    def test_quota_event_without_evidence_still_logs_account_warning(self):
+        self.api._render_account_event({
+            "event": "account_quota_exhausted", "account_name": "Account One",
+        })
+        log = "".join(self.api.controller.log_history)
+        self.assertIn("Account One", log)
+        self.assertNotIn("ChatGPT:", log)
+        self.assertNotIn("None", log)
+
     def test_export_copy_and_clear_log_use_python_history(self):
         self.api.settings["download_folder"] = str(self.data_dir / "output")
         self.api.controller.append_log("hello log")

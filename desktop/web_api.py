@@ -242,7 +242,12 @@ class WebApi:
         entry = mapping.get(event_name)
         if entry:
             key, params = entry
-            self._append_log("\n" + self._text(key, **params) + "\n")
+            message = self._text(key, **params)
+            if event_name == "account_quota_exhausted":
+                evidence = str(event.get("evidence") or "").strip()
+                if evidence:
+                    message += "\n  ChatGPT: " + evidence
+            self._append_log("\n" + message + "\n")
         if event_name == "job_waiting":
             self._set_status("account_waiting_status")
 
