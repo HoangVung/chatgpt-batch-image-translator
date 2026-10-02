@@ -2,6 +2,9 @@ import json
 import os
 import sys
 import unittest
+import threading
+from functools import partial
+from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -16,6 +19,11 @@ except ImportError:
 from desktop.web_text import WEB_TEXT
 
 
+class UiHandler(SimpleHTTPRequestHandler):
+    def log_message(self, *args):
+        pass
+
+
 class WebFrontendTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -23,7 +31,10 @@ class WebFrontendTests(unittest.TestCase):
             raise unittest.SkipTest("Playwright is required for web frontend smoke tests")
         cls.playwright = sync_playwright().start()
         try:
-            cls.browser = cls.playwright.chromium.launch(headless=True)
+            options = {"headless": True}
+            if os.environ.get("BATCH_TEST_BROWSER"):
+                options["executable_path"] = os.environ["BATCH_TEST_BROWSER"]
+            cls.browser = cls.playwright.chromium.launch(**options)
         except PlaywrightError as bundled_error:
             try:
                 cls.browser = cls.playwright.chromium.launch(channel="msedge", headless=True)
@@ -32,11 +43,18 @@ class WebFrontendTests(unittest.TestCase):
                 raise unittest.SkipTest(
                     f"Playwright Chromium and Microsoft Edge are unavailable: {bundled_error}; {edge_error}"
                 ) from edge_error
+        cls.ui_server = ThreadingHTTPServer(('127.0.0.1', 0), partial(UiHandler, directory=str(PROJECT_ROOT / 'ui')))
+        cls.ui_thread = threading.Thread(target=cls.ui_server.serve_forever, daemon=True)
+        cls.ui_thread.start()
+        cls.ui_url = f'http://127.0.0.1:{cls.ui_server.server_port}/index.html'
 
     @classmethod
     def tearDownClass(cls):
         cls.browser.close()
         cls.playwright.stop()
+        cls.ui_server.shutdown()
+        cls.ui_server.server_close()
+        cls.ui_thread.join(timeout=5)
 
     def test_initial_render_events_and_main_command_use_fake_bridge(self):
         page = self.browser.new_page()
@@ -98,14 +116,15 @@ class WebFrontendTests(unittest.TestCase):
           }};
         """ % json.dumps(json.dumps(initial, ensure_ascii=False))
         page.add_init_script(bootstrap)
-        page.goto((PROJECT_ROOT / "ui" / "index.html").as_uri())
+        page.goto(self.ui_url)
         page.wait_for_function("document.querySelector('#status').textContent === 'Sẵn sàng'")
 
         self.assertEqual(page.locator("#backend").text_content(), "fake-webview2")
         self.assertEqual(page.locator("#log").text_content(), "initial log\n")
         self.assertEqual(page.locator("#account-select option").count(), 2)
         self.assertEqual(page.locator("#account-select").input_value(), "business")
-        self.assertEqual(page.locator("#account-context").text_content(), "Business")
+        self.assertEqual(page.locator("#tab-book-1 .workflow-account").text_content(), "Tài khoản: Business")
+        self.assertTrue(page.locator("#tab-book-1").is_visible())
         self.assertEqual(page.locator("#source-folder").get_attribute("title"), initial["settings"]["image_folder"])
 
         page.locator("#theme").select_option("dark")
@@ -232,7 +251,7 @@ class WebFrontendTests(unittest.TestCase):
           }};
         """ % json.dumps(json.dumps(initial, ensure_ascii=False))
         page.add_init_script(bootstrap)
-        page.goto((PROJECT_ROOT / "ui" / "index.html").as_uri())
+        page.goto(self.ui_url)
         page.evaluate("window.batchTranslatorReceive({sequence:1,type:'log_appended',payload:{text:'realtime log\\n'}})")
         page.evaluate(
             "raw => window.resolveInitialState({ok:true,data:JSON.parse(raw)})",
@@ -275,7 +294,7 @@ class WebFrontendTests(unittest.TestCase):
           }};
         """ % json.dumps(json.dumps(initial, ensure_ascii=False))
         page.add_init_script(bootstrap)
-        page.goto((PROJECT_ROOT / "ui" / "index.html").as_uri())
+        page.goto(self.ui_url)
         page.wait_for_function("document.querySelector('#status').textContent === 'Sẵn sàng'")
         page.wait_for_selector(".traffic-lights")
 

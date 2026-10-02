@@ -32,54 +32,12 @@ function captureDraft(target = state) {
   target.draft = formPayload();
   target.accountNameDraft = $("#account-name").value;
   target.logScroll = $("#log").scrollTop;
-  renderServiceContexts();
-}
-
-function renderServiceContexts() {
-  const container = $("#service-contexts");
-  sessions.forEach((target, id) => {
-    let row = document.getElementById(`service-${id}`);
-    if (!row) {
-      row = document.createElement("div");
-      row.id = `service-${id}`;
-      row.className = "book-service-context";
-      const label = document.createElement("strong");
-      label.className = "context-book";
-      const pill = document.createElement("div");
-      pill.className = "context-pill";
-      const dot = document.createElement("span");
-      dot.className = "context-dot";
-      dot.setAttribute("aria-hidden", "true");
-      const service = document.createElement("strong");
-      service.className = "context-service";
-      const account = document.createElement("p");
-      account.className = "context-caption";
-      if (!multiSession) {
-        service.id = "service-context";
-        account.id = "account-context";
-      }
-      pill.append(dot, service);
-      row.append(label, pill, account);
-      container.append(row);
-    }
-    const settings = {...target.settings, ...target.draft};
-    const account = (settings.chatgpt_accounts || []).find(item => item.id === settings.active_chatgpt_account_id);
-    const serviceName = settings.service === "gemini" ? "Google Gemini" : "ChatGPT";
-    const accountName = settings.service === "gemini" ? "Google Gemini" : account?.name || "—";
-    setText(row.querySelector(".context-book"), t("book_tab", {number: id.split("-").at(-1)}));
-    row.querySelector(".context-book").hidden = !multiSession;
-    setText(row.querySelector(".context-service"), serviceName);
-    setText(row.querySelector(".context-caption"), accountName);
-    row.querySelector(".context-caption").title = accountName;
-    row.dataset.active = String(target === state);
-  });
+  renderTabs();
 }
 
 function renderTabs() {
-  renderServiceContexts();
   const container = $("#workflow-tabs");
-  container.classList.toggle("hidden", !multiSession);
-  container.setAttribute("aria-label", t("workflow_tabs"));
+  container.setAttribute("aria-label", t(multiSession ? "workflow_tabs" : "books"));
   sessions.forEach((target, id) => {
     let button = document.getElementById(`tab-${id}`);
     if (!button) {
@@ -89,13 +47,19 @@ function renderTabs() {
       button.className = "workflow-tab";
       button.setAttribute("role", "tab");
       button.setAttribute("aria-controls", "workflow-panel");
-      button.append(document.createElement("strong"), document.createElement("small"), document.createElement("small"));
+      button.append(document.createElement("strong"));
+      for (const className of ["workflow-status", "workflow-folder-progress", "workflow-account"]) {
+        const line = document.createElement("small");
+        line.className = className;
+        button.append(line);
+      }
       button.addEventListener("click", () => switchSession(id));
       button.addEventListener("keydown", (event) => {
-        if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+        if (!["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
         event.preventDefault();
         const ids = [...sessions.keys()];
-        const next = event.key === "Home" ? ids[0] : event.key === "End" ? ids.at(-1) : ids[(ids.indexOf(id) + (event.key === "ArrowRight" ? 1 : ids.length - 1)) % ids.length];
+        const forward = event.key === "ArrowRight" || event.key === "ArrowDown";
+        const next = event.key === "Home" ? ids[0] : event.key === "End" ? ids.at(-1) : ids[(ids.indexOf(id) + (forward ? 1 : ids.length - 1)) % ids.length];
         switchSession(next);
         document.getElementById(`tab-${next}`).focus();
       });
@@ -108,9 +72,15 @@ function renderTabs() {
     setText(button.firstElementChild, label);
     const folder = c.folder_progress || {};
     const folderStatus = t("tab_folder_progress", {done: folder.done ?? "—", total: folder.total ?? "—"});
-    setText(button.children[1], status);
-    setText(button.lastElementChild, folderStatus);
-    button.title = `${label}: ${status}\n${folderStatus}\n${target.settings.image_folder || ""}`;
+    const settings = {...target.settings, ...target.draft};
+    const account = (settings.chatgpt_accounts || []).find(item => item.id === settings.active_chatgpt_account_id);
+    const accountLabel = settings.service === "gemini" ? "Google Gemini" : t("tab_account", {name: account?.name || "—"});
+    setText(button.querySelector(".workflow-status"), status);
+    setText(button.querySelector(".workflow-folder-progress"), folderStatus);
+    const accountLine = button.querySelector(".workflow-account");
+    setText(accountLine, accountLabel);
+    accountLine.title = accountLabel;
+    button.title = `${label}: ${status}\n${folderStatus}\n${accountLabel}\n${target.settings.image_folder || ""}`;
     button.setAttribute("aria-selected", String(target === state));
     button.tabIndex = target === state ? 0 : -1;
     button.dataset.attention = String(attention);
@@ -265,7 +235,6 @@ function renderAccounts() {
   });
   const active = accounts.find((item) => item.id === select.value);
   $("#account-name").value = active?.name || "";
-  renderServiceContexts();
   $("#account-count").textContent = String(accounts.length);
 }
 
@@ -550,34 +519,13 @@ function bind() {
     } catch (error) { showError(error, target); }
     finally { target.launchPending = false; renderController(); }
   });
-  // Keep navigation and keyboard focus below the pinned header as text wraps.
-  const workspaceHeader = $(".workspace-header");
-  const updateDockPosition = () => {
-    const bounds = workspaceHeader.getBoundingClientRect();
-    document.documentElement.style.setProperty("--batch-dock-center-x", `${bounds.left + bounds.width / 2}px`);
-    document.documentElement.style.setProperty("--batch-dock-available-width", `${Math.max(0, bounds.width - 24)}px`);
-  };
-  const headerObserver = new ResizeObserver(() => {
-    const offset = workspaceHeader.getBoundingClientRect().height + $(".titlebar").getBoundingClientRect().height + 12;
+  // Only the window titlebar remains pinned above scrolling content.
+  const windowTitlebar = $(".titlebar");
+  const titlebarObserver = new ResizeObserver(() => {
+    const offset = windowTitlebar.getBoundingClientRect().height + 12;
     document.documentElement.style.setProperty("--workspace-scroll-offset", `${offset}px`);
-    updateDockPosition();
   });
-  headerObserver.observe(workspaceHeader);
-  headerObserver.observe($(".titlebar"));
-  window.addEventListener("resize", updateDockPosition);
-  updateDockPosition();
-  const batchDock = $(".batch-dock");
-  const updateDockHeight = () => {
-    document.documentElement.style.setProperty("--batch-dock-height", `${Math.ceil(batchDock.getBoundingClientRect().height)}px`);
-  };
-  const dockObserver = new ResizeObserver(updateDockHeight);
-  dockObserver.observe(batchDock, {box: "border-box"});
-  updateDockHeight();
-  $$('[data-scroll-target]').forEach((button) => button.addEventListener("click", () => {
-    const target = document.getElementById(button.dataset.scrollTarget);
-    if (target) target.scrollIntoView({behavior: "smooth", block: "start"});
-    $$('.nav').forEach((item) => item.classList.toggle("active", item === button));
-  }));
+  titlebarObserver.observe(windowTitlebar);
   ["source-folder", "output-folder", "profile-folder"].forEach((id) => {
     $(`#${id}`).addEventListener("input", updatePathPresentation);
   });
@@ -605,7 +553,7 @@ async function accountAction(method, id, name) {
   } catch (error) {
     showError(error, target);
   }
-  finally { target.launchPending = false; renderController(); renderServiceContexts(); }
+  finally { target.launchPending = false; renderController(); }
 }
 
 if (window.pywebview?.api) initialize();
@@ -752,4 +700,3 @@ window.addEventListener("pywebviewready", () => {
   zoom.setAttribute("aria-label", "Maximize window");
   zoom.title = "Phóng to";
 });
-
