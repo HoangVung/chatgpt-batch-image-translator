@@ -193,6 +193,7 @@ SEND_VERIFY_TIMEOUT = 45
 PROMPT_CHEP_LAI = "chép lại nguyên văn"
 PROMPT_DICH = "dịch bản chép lại"
 PROMPT_TAO_ANH = "Tạo ảnh với bản dịch"
+PROMPT_TAO_ANH_GEMINI = "Tạo lại ảnh gốc với bản dịch tiếng Việt ở trên"
 
 IMAGE_QUOTA_MARKERS = (
     "Bạn đã hết lượt tạo hình ảnh",
@@ -2007,26 +2008,143 @@ def wait_image_generation_finished_or_image_ready(
     return None
 
 
+GEMINI_IMAGE_TOOL_NAME = re.compile(
+    r"^(?:create images?|generate images?|image generation|images?|"
+    r"tạo (?:hình )?ảnh|hình ảnh|ảnh)(?:\s|$)", re.IGNORECASE
+)
+GEMINI_TOOLS_MENU_NAME = re.compile(
+    r"^(?:tools|open tools(?: menu)?|công cụ|mở (?:menu |trình đơn )?công cụ)$",
+    re.IGNORECASE,
+)
+
+
+def get_gemini_composer(page):
+    """Keep selected-tool checks out of chat history and menu options."""
+    prompt = get_prompt_locator(page)
+    for ancestor in (
+        "input-area-v2", "input-area",
+        "*[contains(concat(' ', normalize-space(@class), ' '), ' input-area-container ')]",
+        "*[contains(concat(' ', normalize-space(@class), ' '), ' input-area ')]",
+        "input-container", "form", '*[@data-testid="composer"]',
+    ):
+        root = prompt.locator("xpath=ancestor::" + ancestor).first
+        if root.count() > 0:
+            return root
+    raise RuntimeError("Không xác định được vùng nhập của Gemini để xác nhận công cụ ảnh.")
+
+
+def gemini_image_tool_selected(page):
+    composer = get_gemini_composer(page)
+    return composer.evaluate(r"""
+        (root) => {
+            const imageLabel = /^(?:(?:remove|deselect|bỏ chọn|xóa)\s+)?(?:create images?|generate images?|image generation|images?|tạo (?:hình )?ảnh|hình ảnh|ảnh)(?:\s+(?:mode|tool))?(?:[,.]?\s+(?:selected|click to|đã chọn|nhấn để).*)?$/i;
+            const candidates = root.querySelectorAll(
+                '[aria-pressed="true"], [aria-selected="true"], [data-selected="true"], ' +
+                '[data-state="active"], .selected, .is-selected, .tool-chip, .selected-tool, ' +
+                '.input-area-switch, .input-area-switch-label, .toolbox-drawer-button, ' +
+                '[data-test-id*="tool-chip"], [data-testid*="tool-chip"], ' +
+                'button[aria-label*="Deselect" i], button[aria-label*="Bỏ chọn" i], ' +
+                'button[aria-label*="Remove" i]'
+            );
+            return Array.from(candidates).some((node) => {
+                if (node.closest('[role="menu"], [role="listbox"], .cdk-overlay-pane, .toolbox-drawer'))
+                    return false;
+                const control = node.closest('button, [role="button"]') || node;
+                if (control.getAttribute('aria-pressed') === 'false' ||
+                    control.getAttribute('aria-selected') === 'false') return false;
+                const rect = node.getBoundingClientRect();
+                const style = window.getComputedStyle(node);
+                if (!rect.width || !rect.height || style.visibility === 'hidden' ||
+                    style.display === 'none' || node.closest('[hidden], [aria-hidden="true"]'))
+                    return false;
+                const copy = node.cloneNode(true);
+                copy.querySelectorAll('mat-icon, svg, .material-icons, .material-symbols-outlined')
+                    .forEach((icon) => icon.remove());
+                const labels = [node.getAttribute('aria-label'), control.getAttribute('aria-label'),
+                    copy.textContent].filter(Boolean);
+                return labels.some((label) => imageLabel.test(label.replace(/\s+/g, ' ').trim()));
+            });
+        }
+    """)
+
+
+def click_gemini_named_control(scope, name, roles=("button",)):
+    for role in roles:
+        controls = scope.get_by_role(role, name=name)
+        for index in range(controls.count()):
+            control = controls.nth(index)
+            if control.evaluate("""el => !!el.closest(
+                'model-response, user-query, message-content, .model-response-text, ' +
+                '.message-content, [data-message-author-role], [data-turn], ' +
+                '[data-testid^="conversation-turn-"]'
+            )"""):
+                continue
+            if control.is_visible() and control.is_enabled():
+                control.click(timeout=5000)
+                return True
+    return False
+
+
+def ensure_gemini_image_tool(page, timeout=15):
+    """Select image generation and confirm its composer chip before entering a prompt."""
+    print("→ Chọn công cụ tạo ảnh của Gemini")
+    if not wait_prompt_ready(page, timeout=60):
+        raise RuntimeError("Ô nhập Gemini chưa sẵn sàng để chọn công cụ tạo ảnh.")
+    if gemini_image_tool_selected(page):
+        print("✓ Công cụ tạo ảnh của Gemini đã được chọn")
+        return
+
+    composer = get_gemini_composer(page)
+    # Some layouts expose the image tool directly beside the prompt.
+    selected = click_gemini_named_control(composer, GEMINI_IMAGE_TOOL_NAME)
+    if not selected:
+        if not click_gemini_named_control(composer, GEMINI_TOOLS_MENU_NAME):
+            raise RuntimeError("Không tìm thấy nút Công cụ / Tools của Gemini; chưa gửi prompt tạo ảnh.")
+        # Angular menus may be rendered in an overlay outside the composer.
+        start = time.monotonic()
+        while time.monotonic() - start < timeout:
+            if click_gemini_named_control(page, GEMINI_IMAGE_TOOL_NAME, ("menuitem", "option", "button")):
+                selected = True
+                break
+            sleep(0.5)
+    if selected:
+        start = time.monotonic()
+        while time.monotonic() - start < timeout:
+            if gemini_image_tool_selected(page):
+                print("✓ Đã xác nhận công cụ tạo ảnh của Gemini")
+                return
+            sleep(0.5)
+    raise RuntimeError(
+        "Không xác nhận được công cụ Tạo ảnh / Create images của Gemini; chưa gửi prompt tạo ảnh. "
+        "Kiểm tra công cụ ảnh trong tài khoản hoặc giao diện Gemini."
+    )
+
+
 def try_create_image(page, old_imgs):
+    prompt_text = PROMPT_TAO_ANH_GEMINI if SERVICE == "gemini" else PROMPT_TAO_ANH
+    service_name = "Gemini" if SERVICE == "gemini" else "ChatGPT"
     for attempt in range(1, MAX_RETRY_IMAGE + 1):
         print(f"→ Tạo ảnh lần {attempt}")
+
+        if SERVICE == "gemini":
+            ensure_gemini_image_tool(page)
 
         before_send_imgs = get_all_image_srcs(page, include_pending=True)
         merged_old_imgs = list(dict.fromkeys(old_imgs + before_send_imgs))
         before_response = get_assistant_response_signature(page)
 
-        send_prompt(page, PROMPT_TAO_ANH, max_send_attempts=1)
+        send_prompt(page, prompt_text, max_send_attempts=1)
 
         # Chỉ chờ phản hồi bắt đầu, không dùng hàm timeout ngắn 180 giây để kết luận fail.
         # Sau đó chuyển sang hàm chờ ảnh riêng bên dưới.
         started = False
         start = time.time()
-        print("⏳ Chờ ChatGPT bắt đầu tạo ảnh...")
+        print(f"⏳ Chờ {service_name} bắt đầu tạo ảnh...")
         while time.time() - start < 120:
             wait_if_cloudflare(page)
             quota_evidence = get_generation_quota_evidence(page, before_response)
             if quota_evidence:
-                print("⚠ ChatGPT báo đã hết lượt tạo ảnh")
+                print(f"⚠ {service_name} báo đã hết lượt tạo ảnh")
                 raise QuotaExhaustedError(quota_evidence)
             if is_generating(page):
                 started = True
@@ -2038,7 +2156,7 @@ def try_create_image(page, old_imgs):
 
         if not started:
             current_text = get_prompt_text(page)
-            if PROMPT_TAO_ANH in current_text:
+            if prompt_text in current_text:
                 raise Exception("Prompt tạo ảnh vẫn còn trong ô nhập sau khi gửi; dừng để tránh gửi trùng.")
 
         img_url = wait_image_generation_finished_or_image_ready(
@@ -2052,7 +2170,7 @@ def try_create_image(page, old_imgs):
             return img_url
 
         # Trước khi retry lần sau, chờ chắc chắn ChatGPT đã thật sự dừng.
-        print("⚠ Chưa lấy được ảnh → chuẩn bị retry, chờ ChatGPT idle chắc chắn")
+        print(f"⚠ Chưa lấy được ảnh → chuẩn bị retry, chờ {service_name} idle chắc chắn")
         idle_start = time.time()
         while time.time() - idle_start < 120:
             wait_if_cloudflare(page)
