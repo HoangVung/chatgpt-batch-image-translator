@@ -43,7 +43,7 @@ class GeminiAccountsFrontendTests(unittest.TestCase):
             })};
         """)
         self.page.goto((PROJECT_ROOT / "ui/index.html").as_uri())
-        self.page.wait_for_selector("#tab-book-2")
+        self.page.wait_for_selector("#tab-book-4")
 
     def tearDown(self):
         self.page.close()
@@ -60,6 +60,7 @@ class GeminiAccountsFrontendTests(unittest.TestCase):
         page = self.page
         chatgpt = self.manager.sessions["book-1"].settings["chatgpt_accounts"].copy()
         page.locator("#service").select_option("gemini")
+        self.assertEqual(page.locator(".workflow-tab").count(), 4)
         self.assertTrue(page.locator("#accounts-card").is_visible())
         self.assertEqual(page.locator("#account-label").text_content(), "Tài khoản Gemini")
         self.assertEqual(page.locator("#account-name").input_value(), "Gemini 1")
@@ -74,7 +75,7 @@ class GeminiAccountsFrontendTests(unittest.TestCase):
         page.locator("#account-name").fill("Google cá nhân")
         page.locator("#account-rename").click()
         page.wait_for_function("document.querySelector('#account-select').selectedOptions[0].textContent === 'Google cá nhân'")
-        self.assertIn("Google cá nhân", page.locator("#tab-book-1").text_content())
+        self.assertIn("Google cá nhân", page.locator("#tab-book-1 .workflow-account").text_content())
         page.locator("#account-login").click()
         page.wait_for_function("document.querySelector('#account-login').disabled && document.body.classList.contains('is-running')")
         env = self.factories["book-1"].calls[-1][1]["env"]
@@ -92,16 +93,16 @@ class GeminiAccountsFrontendTests(unittest.TestCase):
         page.locator("#service").select_option("gemini")
         self.assertEqual(page.locator("#account-select").input_value(), first_id)
         self.assertTrue(page.locator("#fallback").is_disabled())
-        page.locator("#tab-book-2").click()
+        page.locator("#tab-book-3").click()
         page.locator("#service").select_option("gemini")
         self.assertEqual(page.locator("#account-count").text_content(), "1")
-        self.add("Book B Google")
+        self.add("Book C Google")
         page.locator("#tab-book-1").click()
         self.assertEqual(page.locator("#account-select").input_value(), first_id)
         self.assertEqual(page.locator("#account-name").input_value(), "Book A Google")
         self.assertEqual(page.locator("#account-count").text_content(), "2")
         self.assertNotEqual(self.manager.sessions["book-1"].settings["profile_dir"],
-                            self.manager.sessions["book-2"].settings["profile_dir"])
+                            self.manager.sessions["book-3"].settings["profile_dir"])
         page.screenshot(path=str(PROJECT_ROOT.parent / "scratch/gemini-accounts-preview.png"), full_page=True)
 
 

@@ -82,10 +82,8 @@ function renderTabs() {
     const folder = c.folder_progress || {};
     const folderStatus = t("tab_folder_progress", {done: folder.done ?? "—", total: folder.total ?? "—"});
     const settings = {...target.settings, ...target.draft};
-    const service = settings.service;
-    const account = (settings[`${service}_accounts`] || []).find(item => item.id === settings[`active_${service}_account_id`]);
-    const accountName = account?.name || (service === "gemini" ? "Gemini 1" : "—");
-    const accountLabel = service === "gemini" ? `Google Gemini: ${accountName}` : t("tab_account", {name: accountName});
+    const account = (settings[`${settings.service}_accounts`] || []).find(item => item.id === settings[`active_${settings.service}_account_id`]);
+    const accountLabel = settings.service === "gemini" ? `Google Gemini · ${account?.name || "Gemini 1"}` : t("tab_account", {name: account?.name || "—"});
     setText(button.querySelector(".workflow-status"), status);
     setText(button.querySelector(".workflow-folder-progress"), folderStatus);
     const accountLine = button.querySelector(".workflow-account");
