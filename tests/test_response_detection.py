@@ -72,6 +72,22 @@ class ResponseDetectionTests(unittest.TestCase):
         self.assertEqual(signature["last_tail"], text, signature)
         return signature
 
+    def test_quota_notice_keeps_reset_paragraph_from_new_response_only(self):
+        old = current_chatgpt_unit("assistant", "Earlier response", turn=0)
+        self.page.set_content(old)
+        before = self.worker.get_assistant_response_signature(self.page)
+        notice = "You've hit the Business plan limit for image generations requests."
+        reset = "You can create more images when the limit resets in 5 hours."
+        self.page.set_content(
+            old + current_chatgpt_unit("user", "Generate an image", turn=1)
+            + current_chatgpt_unit("assistant", notice, turn=1)
+            + current_chatgpt_unit("assistant", reset, turn=2)
+        )
+        self.assertEqual(
+            self.worker.get_generation_quota_evidence(self.page, before),
+            notice + "\n" + reset,
+        )
+
     def test_current_chatgpt_user_unit_and_heading_are_not_a_response(self):
         self.page.set_content(f"""
             <main><div data-content-search-turn-key="fallback-turn-0">

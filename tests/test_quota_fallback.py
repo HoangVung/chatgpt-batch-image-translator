@@ -131,6 +131,40 @@ class QuotaDetectionTests(unittest.TestCase):
         with patch.object(worker, "has_new_assistant_response", return_value=True):
             self.assertIsNotNone(worker.get_generation_quota_evidence(SnapshotPage(), before))
 
+    def test_reset_sentence_in_separate_new_node_is_preserved_without_history(self):
+        notice = "Bạn hiện đã hết lượt tạo ảnh."
+        reset = "Bạn có thể tạo thêm ảnh sau khi giới hạn đặt lại sau 5 giờ."
+        snapshot = {"assistant": ["Nội dung cũ", notice, reset], "notices": []}
+        before = {"count": 1}
+        with patch.object(worker, "has_new_assistant_response", return_value=True), \
+             patch.object(worker, "get_assistant_response_snapshot", return_value=snapshot):
+            self.assertEqual(
+                worker.get_generation_quota_evidence(object(), before),
+                notice + "\n" + reset,
+            )
+
+    def test_quota_wait_captures_reset_sentence_that_arrives_later(self):
+        notice = "You've reached the image generation limit."
+        full_notice = notice + "\nYou can create more images when the limit resets in 3 hours."
+        with patch.object(worker, "sleep"), \
+             patch.object(worker, "print"), \
+             patch.object(worker, "is_generating", return_value=False), \
+             patch.object(worker, "get_generation_quota_evidence", side_effect=[
+                 notice, full_notice, full_notice, full_notice,
+             ]), self.assertRaises(worker.QuotaExhaustedError) as caught:
+            worker.raise_image_quota_error(object(), notice, {"count": 0})
+        self.assertEqual(caught.exception.evidence, full_notice)
+
+    def test_quota_wait_is_bounded_and_keeps_evidence_if_notice_disappears(self):
+        notice = "Bạn hiện đã hết lượt tạo ảnh."
+        with patch.object(worker, "sleep") as sleep_mock, \
+             patch.object(worker, "print"), \
+             patch.object(worker, "get_generation_quota_evidence", return_value=None), \
+             self.assertRaises(worker.QuotaExhaustedError) as caught:
+            worker.raise_image_quota_error(object(), notice, {"count": 0})
+        self.assertEqual(caught.exception.evidence, notice)
+        self.assertEqual(sleep_mock.call_count, 10)
+
 
 class AccountRegistryTests(unittest.TestCase):
     def test_active_account_is_first_and_duplicate_profiles_are_removed(self):
@@ -231,11 +265,13 @@ class FallbackCoordinatorTests(unittest.TestCase):
         second_context = Context(second_page)
         process_calls = []
         events = []
+        quota_notice = ("Bạn hiện đã hết lượt tạo ảnh. " + "Thông báo bổ sung. " * 40
+                        + "\nGiới hạn được đặt lại sau 5 giờ.")
 
         def fake_process(page, _indices, image):
             process_calls.append((page, image.name))
             if len(process_calls) == 1:
-                raise worker.QuotaExhaustedError("Bạn hiện đã hết lượt tạo ảnh.")
+                raise worker.QuotaExhaustedError(quota_notice)
 
         fake_playwright = object()
         with patch.object(worker, "RUN_MODE", "main"), \
@@ -269,6 +305,7 @@ class FallbackCoordinatorTests(unittest.TestCase):
             [(first_page, "01_101.jpg"), (second_page, "01_101.jpg"), (second_page, "02_102.jpg")],
         )
         self.assertEqual([event[0] for event in events], ["account_quota_exhausted", "account_switched"])
+        self.assertEqual(events[0][1]["evidence"], quota_notice)
         self.assertTrue(first_context.closed)
 
 

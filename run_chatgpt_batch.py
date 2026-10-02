@@ -982,6 +982,7 @@ def wait_upload_attached(page, timeout=90):
     Chờ ảnh đã bám vào khung chat trước khi gửi prompt.
     Tránh tình huống upload chưa xong đã gõ/gửi prompt.
     """
+    print("→ Chờ nhận diện ảnh tải lên trong ô nhập")
     start = time.time()
 
     while time.time() - start < timeout:
@@ -990,42 +991,62 @@ def wait_upload_attached(page, timeout=90):
         try:
             ok = page.evaluate("""
                 () => {
-                    const prompt = document.querySelector('#prompt-textarea') || 
-                                   document.querySelector('.ql-editor[contenteditable="true"]') ||
-                                   document.querySelector('rich-textarea div[contenteditable="true"]') ||
-                                   document.querySelector('div[contenteditable="true"]');
+                    const visible = (el) => {
+                        const box = el.getBoundingClientRect();
+                        const style = getComputedStyle(el);
+                        return box.width > 0 && box.height > 0 &&
+                            style.visibility !== 'hidden' && style.display !== 'none';
+                    };
+                    let prompt = null;
+                    for (const selector of [
+                        '#prompt-textarea', '.ql-editor[contenteditable="true"]',
+                        'rich-textarea div[contenteditable="true"]', 'div[contenteditable="true"]'
+                    ]) {
+                        prompt = Array.from(document.querySelectorAll(selector)).find(visible);
+                        if (prompt) break;
+                    }
                     if (!prompt) return false;
 
-                    const roots = [];
-                    const addRoot = (root) => {
-                        if (root && !roots.includes(root)) roots.push(root);
-                    };
-                    let root = prompt.closest('form') || prompt.closest('.input-area-container') || prompt.parentElement;
-                    addRoot(root);
+                    // Previews can be siblings several wrappers above the editor,
+                    // without a form or any composer-related class name. Walk the
+                    // local ancestors, but never search the conversation/sidebar.
+                    const outsideComposer = [
+                        'nav', 'aside', '[role="navigation"]',
+                        '[data-testid^="conversation-turn"]', '[data-content-search-turn-key]',
+                        '[data-message-author-role]', '[data-turn="user"]', '[data-turn="assistant"]',
+                        '[data-chatgpt-search-unit-key]', '[data-content-search-unit-key]',
+                        'user-query', 'model-response'
+                    ].join(',');
+                    if (prompt.closest(outsideComposer)) return false;
+                    const composerBoundary = 'form, .input-area-container, #composer-background, ' +
+                        '[data-testid="composer"], [data-type="unified-composer"]';
 
-                    for (let i = 0; i < 6 && root && root.parentElement; i++) {
-                        root = root.parentElement;
-                        const descriptor = [root.className, root.getAttribute('data-testid'), root.getAttribute('role')]
-                            .filter(Boolean)
-                            .join(' ')
-                            .toLowerCase();
-                        if (/(composer|input|prompt|upload|rich-textarea)/.test(descriptor)) {
-                            addRoot(root);
-                        }
+                    for (let root = prompt.parentElement; root; root = root.parentElement) {
+                        if (root === document.body || root === document.documentElement ||
+                            root.matches('main, [role="main"]') ||
+                            root.matches(outsideComposer) || root.querySelector(outsideComposer)) break;
+
+                        const attached = Array.from(root.querySelectorAll('img')).some(img => {
+                            const src = img.currentSrc || img.getAttribute('src') || '';
+                            const box = img.getBoundingClientRect();
+                            const low = src.toLowerCase();
+                            // Encoded image bytes can contain "emoji" or "avatar"
+                            // by chance. Only use those hints for ordinary URLs.
+                            const iconUrl = !low.startsWith('data:') && !low.startsWith('blob:') &&
+                                (low.includes('avatar') || low.includes('emoji'));
+                            return visible(img) && box.width > 40 && box.height > 40 &&
+                                img.complete && img.naturalWidth > 0 &&
+                                !iconUrl &&
+                                !low.startsWith('data:image/svg');
+                        });
+                        if (attached) return true;
+                        if (root.matches(composerBoundary)) break;
                     }
-
-                    return roots.some((candidateRoot) => Array.from(candidateRoot.querySelectorAll('img')).some(img => {
-                        const src = img.getAttribute('src') || '';
-                        const box = img.getBoundingClientRect();
-                        const low = src.toLowerCase();
-                        return box.width > 40 && box.height > 40 &&
-                            !low.includes('avatar') &&
-                            !low.includes('emoji') &&
-                            !src.startsWith('data:image/svg');
-                    }));
+                    return false;
                 }
             """)
             if ok:
+                print("✓ Đã nhận diện ảnh tải lên trong ô nhập")
                 sleep(2)
                 return True
         except Exception:
@@ -1650,15 +1671,35 @@ def get_generation_notice_texts(page, before_signature=None):
 
 
 def get_generation_quota_evidence(page, before_signature=None):
-    """Return a direct quota phrase only from a newly changed response."""
+    """Keep the quota notice and its follow-up text, including reset timing."""
     if before_signature is not None and not has_new_assistant_response(page, before_signature):
         return None
 
-    for text in get_generation_notice_texts(page, before_signature):
+    texts = get_generation_notice_texts(page, before_signature)
+    for index, text in enumerate(texts):
         marker = find_image_quota_marker(text)
         if marker:
+            if before_signature is not None:
+                return "\n".join(str(part).strip() for part in texts[index:])
             return str(text).strip()
     return None
+
+
+def raise_image_quota_error(page, evidence, before_signature):
+    """Allow a short bounded wait for the reset sentence to finish streaming."""
+    unchanged = 0
+    for _ in range(10):
+        sleep(1)
+        current = get_generation_quota_evidence(page, before_signature)
+        if current:
+            unchanged = unchanged + 1 if current == evidence else 0
+            evidence = current
+            if unchanged >= 2 and not is_generating(page):
+                break
+        else:
+            unchanged = 0
+    print("⚠ ChatGPT báo đã hết lượt tạo ảnh")
+    raise QuotaExhaustedError(evidence)
 
 
 def log_response_wait_diagnostics(before_signature, current_signature):
@@ -1973,8 +2014,7 @@ def wait_image_generation_finished_or_image_ready(
 
         quota_evidence = get_generation_quota_evidence(page, before_signature)
         if quota_evidence and not candidate_url:
-            print("⚠ ChatGPT báo đã hết lượt tạo ảnh")
-            raise QuotaExhaustedError(quota_evidence)
+            raise_image_quota_error(page, quota_evidence, before_signature)
 
         elapsed = int(time.time() - start)
 
@@ -2026,8 +2066,7 @@ def try_create_image(page, old_imgs):
             wait_if_cloudflare(page)
             quota_evidence = get_generation_quota_evidence(page, before_response)
             if quota_evidence:
-                print("⚠ ChatGPT báo đã hết lượt tạo ảnh")
-                raise QuotaExhaustedError(quota_evidence)
+                raise_image_quota_error(page, quota_evidence, before_response)
             if is_generating(page):
                 started = True
                 break
@@ -2499,12 +2538,12 @@ def main():
                                 account_id=current_account["id"],
                                 account_name=current_account["name"],
                                 image=img.name,
-                                evidence=quota_error.evidence[:500],
+                                evidence=quota_error.evidence,
                             )
                             account_states[current_account["id"]] = {
                                 "name": current_account["name"],
                                 "state": "quota_exhausted",
-                                "evidence": quota_error.evidence[:500],
+                                "evidence": quota_error.evidence,
                             }
                             write_job_checkpoint(
                                 job_id=job_id,
