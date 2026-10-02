@@ -554,27 +554,12 @@ function bind() {
   });
   // Keep navigation and keyboard focus below the pinned header as text wraps.
   const workspaceHeader = $(".workspace-header");
-  const updateDockPosition = () => {
-    const bounds = workspaceHeader.getBoundingClientRect();
-    document.documentElement.style.setProperty("--batch-dock-center-x", `${bounds.left + bounds.width / 2}px`);
-    document.documentElement.style.setProperty("--batch-dock-available-width", `${Math.max(0, bounds.width - 24)}px`);
-  };
   const headerObserver = new ResizeObserver(() => {
     const offset = workspaceHeader.getBoundingClientRect().height + $(".titlebar").getBoundingClientRect().height + 12;
     document.documentElement.style.setProperty("--workspace-scroll-offset", `${offset}px`);
-    updateDockPosition();
   });
   headerObserver.observe(workspaceHeader);
   headerObserver.observe($(".titlebar"));
-  window.addEventListener("resize", updateDockPosition);
-  updateDockPosition();
-  const batchDock = $(".batch-dock");
-  const updateDockHeight = () => {
-    document.documentElement.style.setProperty("--batch-dock-height", `${Math.ceil(batchDock.getBoundingClientRect().height)}px`);
-  };
-  const dockObserver = new ResizeObserver(updateDockHeight);
-  dockObserver.observe(batchDock, {box: "border-box"});
-  updateDockHeight();
   $$('[data-scroll-target]').forEach((button) => button.addEventListener("click", () => {
     const target = document.getElementById(button.dataset.scrollTarget);
     if (target) target.scrollIntoView({behavior: "smooth", block: "start"});

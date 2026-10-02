@@ -155,7 +155,7 @@ html {
   min-height: 100%;
   scroll-behavior: smooth;
   scroll-padding-top: var(--workspace-scroll-offset, 38px);
-  scroll-padding-bottom: calc(var(--batch-dock-height, 160px) + 20px);
+  scroll-padding-bottom: var(--spacing-5);
 }
 
 body {
@@ -163,7 +163,6 @@ body {
   min-height: 100vh;
   margin: 0;
   overflow-x: hidden;
-  padding-bottom: calc(var(--batch-dock-height, 160px) + 20px);
   color: var(--text-primary);
   background:
     radial-gradient(circle at 4% 4%, rgba(76, 156, 255, 0.5), transparent 30rem),
@@ -249,7 +248,7 @@ select {
   flex-direction: column;
   align-self: start;
   min-width: 0;
-  height: calc(100vh - var(--batch-dock-height, 160px) - 70px);
+  height: calc(100vh - 70px);
   min-height: 0;
   padding: var(--spacing-4);
   overflow-x: hidden;
@@ -1486,7 +1485,7 @@ select {
 body.no-custom-chrome .titlebar { display: none; }
 body.no-custom-chrome { padding-top: 0; }
 
-/* A compact, centered command island stays within reach while the page scrolls. */
+/* Compact batch controls follow the workspace cards in normal document flow. */
 .visually-hidden {
   position: absolute;
   width: 1px;
@@ -1499,18 +1498,9 @@ body.no-custom-chrome { padding-top: 0; }
 }
 
 .batch-dock {
-  position: fixed;
-  right: auto;
-  bottom: 12px;
-  left: var(--batch-dock-center-x, 50%);
-  z-index: 60;
-  width: min(520px, var(--batch-dock-available-width, calc(100% - 24px)));
-  max-height: calc(100vh - 58px);
-  margin: 0;
-  transform: translateX(-50%);
+  width: min(520px, 100%);
+  margin: var(--spacing-4) auto 0;
   padding: 8px 10px 10px;
-  overflow-x: hidden;
-  overflow-y: auto;
   border-color: var(--glass-border);
   border-radius: 24px;
   color: var(--text-primary);

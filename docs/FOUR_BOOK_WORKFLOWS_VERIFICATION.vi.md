@@ -61,6 +61,10 @@ Kiểm tra Chromium với 28 tổ hợp: Việt/Anh × ChatGPT/Gemini × 1180×8
 
 Sau thay đổi CSS cuối, chạy lại `test_workflow_frontend`, `test_web_frontend` và `test_window_touch`: **15 test đạt**, 20,400 giây; exit 0. Bao gồm chọn/vùng cuộn log khi streaming, chuyển bốn sách, callback đến muộn, theme/ngôn ngữ và thao tác touch cửa sổ. `git diff --check` đạt. Không chạy lại toàn suite backend cho thay đổi chỉ gồm CSS và tài liệu này.
 
+Thanh điều khiển batch được chuyển vào `main.workspace`, ngay dưới cụm card với khoảng cách 16px, cuộn cùng trang. Bỏ vị trí fixed, phép tính căn thanh nổi và phần padding dành cho thanh nổi; sidebar dùng chiều cao cửa sổ mà không trừ chiều cao thanh batch. Giữ nguyên ID, nút điều khiển, tiến trình và logic chạy của bốn sách.
+
+Sau thay đổi thanh batch, **15 test frontend/cửa sổ đạt**, 21,481 giây. Kiểm tra lại 28 tổ hợp kích thước/dịch vụ/ngôn ngữ: thanh batch luôn bên dưới cụm card, không tràn ngang, nút Chạy cuộn đến được và không bị phần tử khác che. Banner chờ thao tác và auto-next tăng chiều cao thanh theo bố cục trang, không đè card; nút chạy ngay gọi đúng sách. `node --check ui/app.js` và `git diff --check` đạt. Ảnh và số đo lần này nằm tại `output/inline-batch-controls/` (được gitignore).
+
 ## Những việc cần nghiệm thu trên máy đích
 
 **Chưa kiểm chứng:** cửa sổ pywebview/WebView2 native, đăng nhập và dịch thật đồng thời qua ChatGPT/Gemini, CPU/RAM và chất lượng/tốc độ với bốn browser. Linux headless không thay thế các kiểm chứng này.
