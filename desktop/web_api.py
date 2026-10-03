@@ -21,8 +21,7 @@ from desktop_controller import ControllerEvent, DesktopController
 from desktop.runtime import (
     apply_form_settings,
     build_process_launch,
-    get_active_account,
-    get_service_accounts,
+    get_active_chatgpt_account,
     get_app_dir,
     get_data_dir,
     load_settings,
@@ -336,8 +335,10 @@ class WebApi:
     def _public_settings(self) -> dict[str, Any]:
         data = dict(self.settings)
         data["chatgpt_accounts"] = [dict(account) for account in normalize_chatgpt_accounts(data, self.data_dir)]
-        data["gemini_accounts"] = [dict(account) for account in data["gemini_accounts"]]
-        data["profile_dir"] = get_active_account(data, self.data_dir)["profile_dir"]
+        if data.get("service") == "chatgpt":
+            data["profile_dir"] = get_active_chatgpt_account(data, self.data_dir)["profile_dir"]
+        else:
+            data["profile_dir"] = data["gemini_profile_dir"]
         return json_safe(data)
 
     def get_initial_state(self) -> dict[str, Any]:
@@ -419,7 +420,11 @@ class WebApi:
                 raise ValueError("batch_size must be a positive integer") from exc
         if mode == "main" and self.settings.get("auto_next_enabled"):
             DesktopController.parse_auto_next_delay(str(self.settings.get("auto_next_delay_minutes", "")))
-        script = self.app_dir / "run_chatgpt_batch.py"
+        if mode == "login" and self.settings.get("service") != "chatgpt":
+            raise ValueError("login is available only for ChatGPT accounts")
+        script_name = ("run_chatgpt_batch_books34.py" if self.session_id in {"book-3", "book-4"}
+                       and self.settings.get("service") == "chatgpt" else "run_chatgpt_batch.py")
+        script = self.app_dir / script_name
         if not getattr(sys, "frozen", False) and not script.is_file():
             raise FileNotFoundError(f"worker not found: {script}")
         if self._closed:
@@ -433,7 +438,7 @@ class WebApi:
         self.run_id = uuid.uuid4().hex
         try:
             launch = build_process_launch(self.settings, mode, app_dir=self.app_dir,
-                                          data_dir=self.data_dir, settings_file=self._snapshot_path)
+                                          data_dir=self.data_dir, settings_file=self._snapshot_path, session_id=self.session_id)
             if not self.controller.start(mode, launch, auto_started=auto_started):
                 raise RuntimeError("a batch is already running")
         except BaseException:
@@ -482,25 +487,17 @@ class WebApi:
             return failure(exc)
 
     def list_accounts(self) -> dict[str, Any]:
-        service = self.settings.get("service", "chatgpt")
         return success({
-            "accounts": [dict(account) for account in get_service_accounts(self.settings, self.data_dir)],
-            "active_id": self.settings[f"active_{service}_account_id"],
-            "service": service,
+            "accounts": [dict(account) for account in normalize_chatgpt_accounts(self.settings, self.data_dir)],
+            "active_id": self.settings["active_chatgpt_account_id"],
         })
-
-    def _activate_account(self, account: dict[str, str]) -> None:
-        service = self.settings.get("service", "chatgpt")
-        self.settings[f"active_{service}_account_id"] = account["id"]
-        self.settings["profile_dir"] = account["profile_dir"]
-        if service == "gemini":
-            self.settings["gemini_profile_dir"] = account["profile_dir"]
 
     def select_account(self, account_id: Any) -> dict[str, Any]:
         try:
             self._require_idle()
             account = self._find_account(account_id)
-            self._activate_account(account)
+            self.settings["active_chatgpt_account_id"] = account["id"]
+            self.settings["profile_dir"] = account["profile_dir"]
             self._settings_changed()
             return self.list_accounts()
         except Exception as exc:
@@ -510,21 +507,20 @@ class WebApi:
         try:
             self._require_idle()
             name = self._validate_account_name(name)
-            accounts = get_service_accounts(self.settings, self.data_dir)
-            service = self.settings.get("service", "chatgpt")
+            accounts = normalize_chatgpt_accounts(self.settings, self.data_dir)
             if any(item["name"].casefold() == name.casefold() for item in accounts):
                 raise ValueError("account name already exists")
             safe_name = re.sub(r"[^A-Za-z0-9_-]+", "_", name).strip("._-") or "account"
-            base = self.data_dir / f"{service}_auto_profile_{safe_name[:48]}"
-            existing = {item["profile_dir"] for key in ("chatgpt_accounts", "gemini_accounts")
-                        for item in self.settings.get(key, [])}
+            base = self.data_dir / f"chatgpt_auto_profile_{safe_name[:48]}"
+            existing = {item["profile_dir"] for item in accounts}
             candidate, suffix = base, 2
             while str(candidate) in existing or candidate.exists():
                 candidate = self.data_dir / f"{base.name}_{suffix}"
                 suffix += 1
             account = {"id": f"account-{uuid.uuid4().hex}", "name": name, "profile_dir": str(candidate)}
             accounts.append(account)
-            self._activate_account(account)
+            self.settings["active_chatgpt_account_id"] = account["id"]
+            self.settings["profile_dir"] = account["profile_dir"]
             self._settings_changed()
             return self.list_accounts()
         except Exception as exc:
@@ -535,8 +531,7 @@ class WebApi:
             self._require_idle()
             account = self._find_account(account_id)
             name = self._validate_account_name(name)
-            if any(item["id"] != account["id"] and item["name"].casefold() == name.casefold()
-                   for item in self.settings[f"{self.settings.get('service', 'chatgpt')}_accounts"]):
+            if any(item["id"] != account["id"] and item["name"].casefold() == name.casefold() for item in self.settings["chatgpt_accounts"]):
                 raise ValueError("account name already exists")
             account["name"] = name
             self._settings_changed()
@@ -547,20 +542,20 @@ class WebApi:
     def remove_account(self, account_id: Any) -> dict[str, Any]:
         try:
             self._require_idle()
-            accounts = get_service_accounts(self.settings, self.data_dir)
-            service = self.settings.get("service", "chatgpt")
+            accounts = normalize_chatgpt_accounts(self.settings, self.data_dir)
             if len(accounts) < 2:
-                raise ValueError(f"at least one {service} account is required")
+                raise ValueError("at least one ChatGPT account is required")
             account = next((item for item in accounts if item["id"] == account_id), None)
             if account is None:
                 raise ValueError("unknown account")
             remaining = [item for item in accounts if item["id"] != account_id]
-            self.settings[f"{service}_accounts"] = remaining
-            active_id = self.settings.get(f"active_{service}_account_id")
+            self.settings["chatgpt_accounts"] = remaining
+            active_id = self.settings.get("active_chatgpt_account_id")
             if active_id == account_id or not any(item["id"] == active_id for item in remaining):
                 active_id = remaining[0]["id"]
+            self.settings["active_chatgpt_account_id"] = active_id
             active = next(item for item in remaining if item["id"] == active_id)
-            self._activate_account(active)
+            self.settings["profile_dir"] = active["profile_dir"]
             self._settings_changed()
             return self.list_accounts()
         except Exception as exc:
@@ -571,6 +566,7 @@ class WebApi:
         if not selected.get("ok"):
             return selected
         try:
+            self.settings["service"] = "chatgpt"
             self._start("login")
             self._dispatch_once()
             return success({"state": self._snapshot()})
@@ -580,7 +576,7 @@ class WebApi:
     def _find_account(self, account_id: Any) -> dict[str, str]:
         if not isinstance(account_id, str):
             raise ValueError("account id must be a string")
-        account = next((item for item in get_service_accounts(self.settings, self.data_dir) if item["id"] == account_id), None)
+        account = next((item for item in normalize_chatgpt_accounts(self.settings, self.data_dir) if item["id"] == account_id), None)
         if account is None:
             raise ValueError("unknown account")
         return account
@@ -606,7 +602,8 @@ class WebApi:
             account = self._find_account(account_id)
         except ValueError:
             return
-        self._activate_account(account)
+        self.settings["active_chatgpt_account_id"] = account["id"]
+        self.settings["profile_dir"] = account["profile_dir"]
         write_settings(self.settings_path, self.settings)
 
     def set_language(self, code: Any) -> dict[str, Any]:

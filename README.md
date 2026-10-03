@@ -13,7 +13,7 @@
 - Chọn thư mục ảnh gốc và thư mục lưu ảnh đã Việt hóa.
 - Bốn sách **Sách 1 / Sách 2 / Sách 3 / Sách 4** ở sidebar trái trong giao diện Liquid Glass, chạy song song với cấu hình, tài khoản, tiến trình và log riêng.
 - Hỗ trợ 2 dịch vụ AI: **ChatGPT** và **Google Gemini** với profile trình duyệt riêng biệt.
-- Quản lý nhiều tài khoản ChatGPT và Gemini trong giao diện web: thêm, đổi tên, chọn profile và mở phiên đăng nhập riêng cho từng tài khoản. Chọn dịch vụ trước khi quản lý tài khoản; Gemini giữ lại profile đăng nhập cũ dưới tên `Gemini 1`. Tự chuyển tài khoản khi hết lượt hiện áp dụng cho ChatGPT.
+- Quản lý nhiều tài khoản ChatGPT ngay trong app: thêm, đổi tên, chọn nhanh profile và mở phiên đăng nhập riêng cho từng tài khoản.
 - Chạy theo batch, lưu tiến trình chi tiết vào `progress.csv`.
 - Quy chuẩn định dạng tên file đầu vào và đầu ra để tránh xung đột hoặc ghi đè.
 - Tiếp tục từ ảnh bất kỳ bằng ô `Bắt đầu từ ảnh`.
@@ -68,7 +68,7 @@ Với mỗi ảnh, app sẽ:
 4. Đợi AI phản hồi xong.
 5. Gửi prompt `dịch bản chép lại`.
 6. Đợi bản dịch.
-7. Với Gemini, giữ nguyên cửa sổ chat, chọn **Công cụ → Tạo ảnh** và xác nhận công cụ đã bật rồi gửi `tạo ảnh gốc từ bản dịch`. Với ChatGPT, gửi `Tạo ảnh với bản dịch`.
+7. Gửi prompt `Tạo ảnh với bản dịch`.
 8. Tải ảnh kết quả về thư mục output (tự động fallback qua nhiều cơ chế tải nếu ảnh bị bảo vệ hoặc cần phiên đăng nhập).
 
 Tên đầu ra bao gồm cả hai số của file nguồn để không ghi đè giữa các ảnh. Ví dụ: `73_129.jpg` được lưu là `00073_00129VN.png`.
@@ -219,7 +219,7 @@ Desktop app for batch-processing book/comic images with ChatGPT or Google Gemini
 - Select input and output image folders.
 - Four **Book 1 / Book 2 / Book 3 / Book 4** workflows in the left sidebar, with independent settings, accounts, progress, and logs.
 - Supports two AI services: **ChatGPT** and **Google Gemini** with isolated browser profiles.
-- Manages multiple ChatGPT and Gemini accounts in the web interface: add, rename, select profiles, and open a separate sign-in session for each account. Select the service before managing its accounts; the existing Gemini login profile is retained as `Gemini 1`. Automatic quota fallback currently applies to ChatGPT.
+- Manages multiple ChatGPT accounts in the app: add, rename, quickly select profiles, and open an independent sign-in session for each account.
 - Run images in batches and track progress in `progress.csv`.
 - Strict file naming convention for input and output to prevent collisions.
 - Continue from a specific image via the `Start from image` field.
@@ -270,7 +270,7 @@ For each image, the app will:
 4. Wait for AI to finish responding.
 5. Send the prompt `dịch bản chép lại`.
 6. Wait for the translation.
-7. For Gemini, keep the same chat window, select **Tools → Create images**, confirm the tool is active, then send `tạo ảnh gốc từ bản dịch`. For ChatGPT, send `Tạo ảnh với bản dịch`.
+7. Send the prompt `Tạo ảnh với bản dịch`.
 8. Download the generated image to the output folder (with multi-stage download fallbacks).
 
 Output names include both source numbers to avoid collisions. For example, `73_129.jpg` is saved as `00073_00129VN.png`.

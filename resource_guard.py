@@ -35,7 +35,6 @@ def overlaps(left, right):
 
 def configured_profiles(settings):
     values = [a.get("profile_dir") for a in settings.get("chatgpt_accounts", [])]
-    values += [a.get("profile_dir") for a in settings.get("gemini_accounts", [])]
     values += [settings.get("profile_dir"), settings.get("gemini_profile_dir")]
     return sorted({canonical_path(p) for p in values if p})
 

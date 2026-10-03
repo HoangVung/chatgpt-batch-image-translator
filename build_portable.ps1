@@ -151,6 +151,7 @@ Invoke-Python -m PyInstaller `
     --hidden-import sqlite3 `
     --collect-binaries sqlite3 `
     --hidden-import run_chatgpt_batch `
+    --hidden-import run_chatgpt_batch_books34 `
     --hidden-import pygetwindow `
     --hidden-import win32process `
     app.pyw

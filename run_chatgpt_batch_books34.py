@@ -1,3 +1,4 @@
+import books34_composer as composer
 import os
 import sys
 import time
@@ -657,48 +658,17 @@ def wait_if_cloudflare(page):
 
 
 def get_prompt_locator(page):
-    if page.locator("#prompt-textarea").count() > 0:
-        return page.locator("#prompt-textarea")
-    elif page.locator('.ql-editor[contenteditable="true"]').count() > 0:
-        return page.locator('.ql-editor[contenteditable="true"]').first
-    elif page.locator('rich-textarea div[contenteditable="true"]').count() > 0:
-        return page.locator('rich-textarea div[contenteditable="true"]').first
-    elif page.locator('div[contenteditable="true"]').count() > 0:
-        return page.locator('div[contenteditable="true"]').first
-    else:
-        return page.locator("#prompt-textarea")
-
+    return composer.editor(page)
 
 def wait_page_ready(page, timeout=120):
-    start = time.time()
-
-    while time.time() - start < timeout:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
         wait_if_cloudflare(page)
-
-        try:
-            text = page.locator("body").inner_text(timeout=3000)
-        except Exception:
-            text = ""
-
-        if (
-            "Ask anything" in text
-            or "Message ChatGPT" in text
-            or "Hỏi bất kỳ điều gì" in text
-            or "Hôm nay bạn có ý tưởng gì" in text
-            or "Enter a prompt" in text
-            or "Nhập câu lệnh" in text
-            or "Trò chuyện để cùng lên ý tưởng" in text
-            or page.locator("#prompt-textarea").count() > 0
-            or page.locator('.ql-editor[contenteditable="true"]').count() > 0
-            or page.locator('rich-textarea').count() > 0
-            or page.locator('div[contenteditable="true"]').count() > 0
-        ):
+        if get_prompt_locator(page).count():
             return True
-
-        sleep(2)
-
+        sleep(min(1, max(0, deadline - time.monotonic())))
+    composer.diagnostic(page, DOWNLOAD_FOLDER, 'page_ready', 'timeout')
     return False
-
 
 def login_if_needed(page, service=SERVICE):
     url = "https://gemini.google.com/app" if service == "gemini" else "https://chatgpt.com/"
@@ -954,394 +924,80 @@ def upload_image(page, img, service=SERVICE):
 
         raise Exception("Không tìm thấy nút 'Tải tệp lên' để gửi ảnh lên Gemini")
     else:
+        wait_if_cloudflare(page)
         try:
-            page.locator("#upload-files").set_input_files(str(img), timeout=8000)
-            print("✓ Upload bằng #upload-files")
-            sleep(6)
-            return
+            composer.upload(page, img)
         except Exception:
-            pass
-
-        file_inputs = page.locator('input[type="file"]')
-        count = file_inputs.count()
-
-        for i in range(count):
-            try:
-                file_inputs.nth(i).set_input_files(str(img), timeout=8000)
-                print(f"✓ Upload bằng input thứ {i}")
-                sleep(6)
-                return
-            except Exception:
-                continue
-
-        raise Exception("Không upload được ảnh")
+            composer.diagnostic(page, DOWNLOAD_FOLDER, 'upload', 'input_failed')
+            raise
 
 
 def wait_upload_attached(page, timeout=90):
-    """
-    Chờ ảnh đã bám vào khung chat trước khi gửi prompt.
-    Tránh tình huống upload chưa xong đã gõ/gửi prompt.
-    """
     print("→ Chờ nhận diện ảnh tải lên trong ô nhập")
-    start = time.time()
-
-    while time.time() - start < timeout:
+    deadline = time.monotonic() + timeout
+    state = {'reason': 'timeout'}
+    while time.monotonic() < deadline:
         wait_if_cloudflare(page)
-
-        try:
-            ok = page.evaluate("""
-                () => {
-                    const visible = (el) => {
-                        const box = el.getBoundingClientRect();
-                        const style = getComputedStyle(el);
-                        return box.width > 0 && box.height > 0 &&
-                            style.visibility !== 'hidden' && style.display !== 'none';
-                    };
-                    let prompt = null;
-                    for (const selector of [
-                        '#prompt-textarea', '.ql-editor[contenteditable="true"]',
-                        'rich-textarea div[contenteditable="true"]', 'div[contenteditable="true"]'
-                    ]) {
-                        prompt = Array.from(document.querySelectorAll(selector)).find(visible);
-                        if (prompt) break;
-                    }
-                    if (!prompt) return false;
-
-                    // Previews can be siblings several wrappers above the editor,
-                    // without a form or any composer-related class name. Walk the
-                    // local ancestors, but never search the conversation/sidebar.
-                    const outsideComposer = [
-                        'nav', 'aside', '[role="navigation"]',
-                        '[data-testid^="conversation-turn"]', '[data-content-search-turn-key]',
-                        '[data-message-author-role]', '[data-turn="user"]', '[data-turn="assistant"]',
-                        '[data-chatgpt-search-unit-key]', '[data-content-search-unit-key]',
-                        'user-query', 'model-response'
-                    ].join(',');
-                    if (prompt.closest(outsideComposer)) return false;
-                    const composerBoundary = 'form, .input-area-container, #composer-background, ' +
-                        '[data-testid="composer"], [data-type="unified-composer"]';
-
-                    for (let root = prompt.parentElement; root; root = root.parentElement) {
-                        if (root === document.body || root === document.documentElement ||
-                            root.matches('main, [role="main"]') ||
-                            root.matches(outsideComposer) || root.querySelector(outsideComposer)) break;
-
-                        const attached = Array.from(root.querySelectorAll('img')).some(img => {
-                            const src = img.currentSrc || img.getAttribute('src') || '';
-                            const box = img.getBoundingClientRect();
-                            const low = src.toLowerCase();
-                            // Encoded image bytes can contain "emoji" or "avatar"
-                            // by chance. Only use those hints for ordinary URLs.
-                            const iconUrl = !low.startsWith('data:') && !low.startsWith('blob:') &&
-                                (low.includes('avatar') || low.includes('emoji'));
-                            return visible(img) && box.width > 40 && box.height > 40 &&
-                                img.complete && img.naturalWidth > 0 &&
-                                !iconUrl &&
-                                !low.startsWith('data:image/svg');
-                        });
-                        if (attached) return true;
-                        if (root.matches(composerBoundary)) break;
-                    }
-                    return false;
-                }
-            """)
-            if ok:
-                print("✓ Đã nhận diện ảnh tải lên trong ô nhập")
-                sleep(2)
-                return True
-        except Exception:
-            pass
-
-        sleep(1)
-
-    raise Exception("Không xác nhận được ảnh đã attach vào composer sau khi upload.")
-
+        state = composer.inspect(page)
+        if state['upload_error']:
+            break
+        if state['attachment_count'] and not state['uploading']:
+            print("✓ Đã nhận diện ảnh tải lên trong ô nhập")
+            return True
+        sleep(min(1, max(0, deadline - time.monotonic())))
+    reason = 'attachment_missing' if state['reason'] == 'ready' else state['reason']
+    composer.diagnostic(page, DOWNLOAD_FOLDER, 'attachment', reason)
+    raise RuntimeError("Không xác nhận được ảnh đã attach vào composer sau khi upload: " + reason)
 
 def wait_prompt_ready(page, timeout=120):
-    start = time.time()
-
-    while time.time() - start < timeout:
+    deadline = time.monotonic() + timeout
+    state = {'reason': 'timeout'}
+    while time.monotonic() < deadline:
         wait_if_cloudflare(page)
-
-        try:
-            ready = page.evaluate("""
-                () => {
-                    const el = document.querySelector('#prompt-textarea') || 
-                               document.querySelector('.ql-editor[contenteditable="true"]') ||
-                               document.querySelector('rich-textarea div[contenteditable="true"]') ||
-                               document.querySelector('div[contenteditable="true"]');
-                    if (!el) return false;
-
-                    const rect = el.getBoundingClientRect();
-                    const style = window.getComputedStyle(el);
-                    const stopVisible = Array.from(document.querySelectorAll(
-                        'button[data-testid="stop-button"], button[aria-label*="Stop" i], ' +
-                        'button[aria-label*="Cancel" i], button[aria-label*="Dừng" i], ' +
-                        'button[aria-label*="Hủy" i]'
-                    )).some((button) => {
-                        const buttonRect = button.getBoundingClientRect();
-                        const buttonStyle = window.getComputedStyle(button);
-                        return buttonRect.width > 0 && buttonRect.height > 0 &&
-                            buttonStyle.visibility !== 'hidden' && buttonStyle.display !== 'none';
-                    });
-
-                    const disabled =
-                        el.getAttribute('aria-disabled') === 'true' ||
-                        el.getAttribute('disabled') !== null ||
-                        style.pointerEvents === 'none' ||
-                        style.visibility === 'hidden' ||
-                        style.display === 'none';
-
-                    return (
-                        rect.width > 0 &&
-                        rect.height > 0 &&
-                        !stopVisible &&
-                        !disabled
-                    );
-                }
-            """)
-
-            if ready:
-                return True
-
-        except Exception:
-            pass
-
-        sleep(1)
-
+        state = composer.inspect(page)
+        if state['reason'] == 'ready':
+            return True
+        if state['upload_error']:
+            break
+        sleep(min(1, max(0, deadline - time.monotonic())))
+    composer.diagnostic(page, DOWNLOAD_FOLDER, 'prompt_ready', state['reason'])
     return False
 
-
 def safe_click_prompt(page, timeout=60):
-    last_error = None
-    start = time.time()
-
-    while time.time() - start < timeout:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
         wait_if_cloudflare(page)
-
+        box = get_prompt_locator(page)
         try:
-            page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+            if box.count():
+                box.click(timeout=min(3000, max(1, int((deadline - time.monotonic()) * 1000))))
+                return True
         except Exception:
             pass
-
-        box = get_prompt_locator(page)
-
-        try:
-            box.click(timeout=5000)
-            sleep(0.3)
-            return True
-        except Exception as e:
-            last_error = e
-
-        try:
-            box.click(timeout=5000, force=True)
-            sleep(0.3)
-            return True
-        except Exception as e:
-            last_error = e
-
-        try:
-            ok = page.evaluate("""
-                () => {
-                    const el = document.querySelector('#prompt-textarea') || 
-                               document.querySelector('.ql-editor[contenteditable="true"]') ||
-                               document.querySelector('rich-textarea div[contenteditable="true"]') ||
-                               document.querySelector('div[contenteditable="true"]');
-                    if (!el) return false;
-
-                    el.scrollIntoView({block: 'center'});
-                    el.focus();
-
-                    return document.activeElement === el;
-                }
-            """)
-
-            if ok:
-                sleep(0.3)
-                return True
-
-        except Exception as e:
-            last_error = e
-
-        sleep(2)
-
-    raise Exception(f"Không click/focus được prompt box: {last_error}")
-
+        sleep(min(1, max(0, deadline - time.monotonic())))
+    composer.diagnostic(page, DOWNLOAD_FOLDER, 'focus', 'timeout')
+    raise RuntimeError('Không focus được composer hiện tại')
 
 def clear_prompt_box(page):
     box = get_prompt_locator(page)
-
-    try:
-        box.click(timeout=5000, force=True)
-        page.keyboard.press("Control+A")
-        page.keyboard.press("Delete")
-        sleep(0.3)
-        return
-    except Exception:
-        pass
-
-    try:
-        page.evaluate("""
-            () => {
-                const el = document.querySelector('#prompt-textarea') || 
-                           document.querySelector('.ql-editor[contenteditable="true"]') ||
-                           document.querySelector('rich-textarea div[contenteditable="true"]') ||
-                           document.querySelector('div[contenteditable="true"]');
-                if (!el) return;
-
-                el.focus();
-                el.innerHTML = '';
-                el.textContent = '';
-
-                el.dispatchEvent(new InputEvent('input', {
-                    bubbles: true,
-                    inputType: 'deleteContentBackward'
-                }));
-            }
-        """)
-        sleep(0.3)
-    except Exception:
-        pass
-
+    if not box.count():
+        raise RuntimeError('Không thấy editor có thể nhập')
+    box.fill('', timeout=5000)
 
 def fill_prompt_box(page, text):
     box = get_prompt_locator(page)
-
-    try:
-        box.fill(text, timeout=8000)
-        sleep(0.5)
-        return
-    except Exception:
-        pass
-
-    try:
-        page.evaluate("""
-            (value) => {
-                const el = document.querySelector('#prompt-textarea') || 
-                           document.querySelector('.ql-editor[contenteditable="true"]') ||
-                           document.querySelector('rich-textarea div[contenteditable="true"]') ||
-                           document.querySelector('div[contenteditable="true"]');
-                if (!el) throw new Error('Không thấy prompt box');
-
-                el.focus();
-                el.innerHTML = '';
-                el.textContent = value;
-
-                el.dispatchEvent(new InputEvent('input', {
-                    bubbles: true,
-                    inputType: 'insertText',
-                    data: value
-                }));
-            }
-        """, text)
-        sleep(0.5)
-        return
-    except Exception:
-        pass
-
-    try:
-        page.keyboard.type(text, delay=20)
-        sleep(0.5)
-    except Exception as e:
-        raise Exception(f"Không điền được prompt: {e}")
-
+    if not box.count():
+        raise RuntimeError('Không thấy editor có thể nhập')
+    box.fill(text, timeout=8000)
 
 def get_prompt_text(page):
-    try:
-        return page.evaluate("""
-            () => {
-                const el = document.querySelector('#prompt-textarea') || 
-                           document.querySelector('.ql-editor[contenteditable="true"]') ||
-                           document.querySelector('rich-textarea div[contenteditable="true"]') ||
-                           document.querySelector('div[contenteditable="true"]');
-                if (!el) return '';
-                return (el.innerText || el.textContent || '').trim();
-            }
-        """)
-    except Exception:
-        return ""
-
+    box = get_prompt_locator(page)
+    if not box.count():
+        raise RuntimeError('Composer mất kết nối; không thể xác nhận prompt đã gửi')
+    return box.evaluate("el => (el.value ?? el.innerText ?? el.textContent ?? '').trim()")
 
 def is_generating(page):
-    """
-    Nhận diện ChatGPT hoặc Gemini đang xử lý.
-    """
-    try:
-        stop_buttons = page.locator('button[data-testid="stop-button"], button[aria-label*="Stop" i], button[aria-label*="Cancel" i], button[aria-label*="Dừng" i], button[aria-label*="Hủy" i]')
-        if stop_buttons.count() > 0:
-            for i in range(stop_buttons.count()):
-                btn = stop_buttons.nth(i)
-                if btn.is_visible():
-                    return True
-    except Exception:
-        pass
-
-    try:
-        running = page.evaluate("""
-            () => {
-                const buttons = Array.from(document.querySelectorAll('button'));
-                for (const button of buttons) {
-                    const label = (
-                        button.getAttribute('aria-label') ||
-                        button.getAttribute('data-testid') ||
-                        button.innerText ||
-                        ''
-                    ).toLowerCase();
-
-                    if (
-                        label.includes('stop-button') ||
-                        label.includes('stop generating') ||
-                        label.includes('stop streaming') ||
-                        label.includes('dừng tạo') ||
-                        label.includes('dừng phản hồi') ||
-                        label.includes('stop') ||
-                        label.includes('cancel') ||
-                        label.includes('hủy')
-                    ) {
-                        const rect = button.getBoundingClientRect();
-                        const style = window.getComputedStyle(button);
-                        if (
-                            rect.width > 0 &&
-                            rect.height > 0 &&
-                            style.visibility !== 'hidden' &&
-                            style.display !== 'none'
-                        ) {
-                            return true;
-                        }
-                    }
-                }
-
-                const liveRegions = Array.from(document.querySelectorAll(
-                    '[aria-live], [role="status"], [data-testid*="status"], [data-testid*="toast"]'
-                ));
-                const statusText = liveRegions
-                    .map((el) => el.innerText || el.textContent || '')
-                    .join('\\n')
-                    .toLowerCase();
-
-                return [
-                    'analyzing image',
-                    'đang phân tích',
-                    'thinking...',
-                    'thinking…',
-                    'đang suy nghĩ',
-                    'creating image',
-                    'đang tạo ảnh',
-                    'generating',
-                    'đang tạo',
-                    'working on it',
-                    'i’m working',
-                    "i'm working"
-                ].some((marker) => statusText.includes(marker));
-            }
-        """)
-        if running:
-            return True
-    except Exception:
-        pass
-
-    return False
-
+    return composer.inspect(page)['generating']
 
 def has_clear_generation_error(page):
     """
@@ -1368,57 +1024,7 @@ def has_clear_generation_error(page):
 
 
 def click_send_button(page):
-    selectors = [
-        'button[data-testid="send-button"]',
-        'button[aria-label="Send message"]',
-        'button[aria-label="Gửi tin nhắn"]',
-        'button[aria-label="Submit message"]',
-        'button[aria-label*="Send" i]',
-        'button[aria-label*="Gửi" i]',
-        'button[aria-label*="Submit" i]',
-        'button.send-button'
-    ]
-
-    for sel in selectors:
-        try:
-            btn = page.locator(sel).last
-            if btn.count() > 0 and btn.is_visible() and btn.is_enabled():
-                btn.click(timeout=4000, force=True)
-                sleep(0.8)
-                return True
-        except Exception:
-            pass
-
-    try:
-        ok = page.evaluate("""
-            () => {
-                const candidates = [
-                    'button[data-testid="send-button"]',
-                    'button[aria-label="Send message"]',
-                    'button[aria-label="Gửi tin nhắn"]',
-                    'button[aria-label="Submit message"]',
-                    'button[aria-label*="Send" i]',
-                    'button[aria-label*="Gửi" i]',
-                    'button[aria-label*="Submit" i]',
-                    'button.send-button'
-                ];
-
-                for (const sel of candidates) {
-                    const btn = document.querySelector(sel);
-                    if (btn && !btn.disabled && btn.getAttribute('aria-disabled') !== 'true') {
-                        btn.click();
-                        return true;
-                    }
-                }
-
-                return false;
-            }
-        """)
-        sleep(0.8)
-        return bool(ok)
-    except Exception:
-        return False
-
+    return composer.click_send(page)
 
 def verify_prompt_sent(page, original_text, timeout=SEND_VERIFY_TIMEOUT):
     start = time.time()
@@ -1475,7 +1081,7 @@ def send_prompt(page, text, max_send_attempts=4):
                 print("⚠ Nội dung prompt chưa vào đúng ô nhập → gõ lại bằng keyboard")
                 clear_prompt_box(page)
                 safe_click_prompt(page, timeout=20)
-                page.keyboard.type(text, delay=30)
+                get_prompt_locator(page).press_sequentially(text, delay=30, timeout=8000)
                 sleep(1)
 
             action_done = False
@@ -1485,7 +1091,7 @@ def send_prompt(page, text, max_send_attempts=4):
                 action_done = True
             else:
                 print("  ↳ Không thấy nút gửi rõ ràng, thử Enter một lần")
-                page.keyboard.press("Enter")
+                get_prompt_locator(page).press("Enter", timeout=4000)
                 action_done = True
 
             if action_done and verify_prompt_sent(page, text, timeout=SEND_VERIFY_TIMEOUT):

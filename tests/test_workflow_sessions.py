@@ -47,6 +47,34 @@ class WorkflowTests(unittest.TestCase):
         self.registry_patch.stop()
         self.temp.cleanup()
 
+    def test_books34_controls_leave_stable_processes_state_and_settings_untouched(self):
+        for key in ('book-1','book-2'):
+            self.assertTrue(self.bridge.start_batch('main',key)['ok'])
+        protected = {}
+        for key in ('book-1','book-2'):
+            api=self.manager.sessions[key]
+            protected[key]=(api.controller.process, deepcopy(api.controller.state),
+                            deepcopy(api.settings), api.settings_path.read_bytes(), list(api.sent_events))
+        for key in ('book-3','book-4'):
+            api=self.manager.sessions[key]
+            api.controller.schedule_auto_next()
+            self.assertTrue(self.bridge.cancel_auto_next(key)['ok'])
+            self.assertTrue(self.bridge.add_account('New fallback',key)['ok'])
+            account=api.settings['chatgpt_accounts'][-1]
+            api.controller.handle_worker_output('__ACCOUNT_EVENT__='+json.dumps({'event':'account_switched','account_id':account['id']}))
+            api._dispatch_once()
+            api.controller.schedule_auto_next()
+            self.assertTrue(self.bridge.run_auto_next_now(key)['ok'])
+            self.assertEqual(self.factories[key].calls[-1][1]['env']['BATCH_TRANSLATOR_WORKER_VARIANT'],'books34')
+            self.assertTrue(self.bridge.stop_process(key)['ok'])
+        for key, before in protected.items():
+            api=self.manager.sessions[key]
+            self.assertIs(api.controller.process,before[0])
+            self.assertEqual(api.controller.state,before[1])
+            self.assertEqual(api.settings,before[2])
+            self.assertEqual(api.settings_path.read_bytes(),before[3])
+            self.assertEqual(list(api.sent_events),before[4])
+
     def test_secondary_defaults_do_not_clone_book_or_profiles(self):
         with tempfile.TemporaryDirectory() as directory:
             manager = SessionManager(app_dir=ROOT, data_dir=Path(directory))
@@ -181,7 +209,7 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(existing.read_bytes(), b"existing bytes")
         self.assertTrue(self.bridge.start_batch("main", "book-1")["ok"])
 
-    def test_upgrade_preserves_existing_books_and_saved_new_books(self):
+    def test_upgrade_preserves_stable_books_and_data_while_resetting_books34(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             originals, files = {}, {}
@@ -205,9 +233,17 @@ class WorkflowTests(unittest.TestCase):
                     files[marker] = marker.read_bytes()
             manager = SessionManager(app_dir=ROOT, data_dir=root)
             try:
-                for key in WORKFLOW_IDS:
+                for key in WORKFLOW_IDS[:2]:
                     self.assertEqual(manager.sessions[key].settings, originals[key])
+                for key, template in (("book-3", "book-1"), ("book-4", "book-2")):
+                    api = manager.sessions[key]
+                    self.assertEqual(api.settings["batch_size"], originals[template]["batch_size"])
+                    self.assertEqual(api.settings["service"], originals[template]["service"])
+                    self.assertEqual(api.settings["start_from"], "")
+                    self.assertEqual((api.data_dir / "books34-setup-v1" / "app_settings.original.json").read_bytes(), files[api.settings_path])
                 for path, contents in files.items():
+                    if path.name == "app_settings.json" and path.parent.name in {"book-3", "book-4"}:
+                        continue
                     self.assertEqual(path.read_bytes(), contents, str(path))
             finally:
                 manager._shutdown()
@@ -230,9 +266,14 @@ class WorkflowTests(unittest.TestCase):
                                   "auto_account_fallback_enabled", "theme", "language"):
                         self.assertEqual(other.settings[field], settings[field])
                     self.assertEqual([a["id"] for a in other.settings["chatgpt_accounts"]], ["default"])
-                    self.assertEqual(other.settings["profile_dir"], str(other.data_dir / "chatgpt_auto_profile"))
-                    self.assertEqual(other.settings["gemini_profile_dir"], str(other.data_dir / "gemini_auto_profile"))
-                    self.assertFalse(other.settings_path.exists())
+                    if key == "book-2":
+                        self.assertEqual(other.settings["profile_dir"], str(other.data_dir / "chatgpt_auto_profile"))
+                        self.assertEqual(other.settings["gemini_profile_dir"], str(other.data_dir / "gemini_auto_profile"))
+                        self.assertFalse(other.settings_path.exists())
+                    else:
+                        self.assertIn("isolated-profiles", other.settings["profile_dir"])
+                        self.assertEqual(other.settings["profile_dir"], other.settings["gemini_profile_dir"])
+                        self.assertTrue(other.settings_path.exists())
             finally:
                 manager._shutdown()
 
@@ -304,6 +345,7 @@ class WorkflowTests(unittest.TestCase):
                 self.assertTrue(self.bridge.run_auto_next_now(key)["ok"])
                 env = self.factories[key].calls[-1][1]["env"]
                 self.assertEqual(env["PROFILE_DIR"], accounts[key]["profile_dir"])
+                self.assertEqual(env.get("BATCH_TRANSLATOR_WORKER_VARIANT"), "books34" if key in {"book-3", "book-4"} else None)
                 snapshot = json.loads(Path(env["BATCH_TRANSLATOR_SETTINGS_FILE"]).read_text(encoding="utf-8"))
                 self.assertEqual(snapshot["active_chatgpt_account_id"], accounts[key]["id"])
                 self.assertTrue(all(event["session_id"] == key for event in api.sent_events))
@@ -332,6 +374,7 @@ class WorkflowTests(unittest.TestCase):
                     self.assertTrue(result["ok"], result)
                     env = self.factories[key].calls[-1][1]["env"]
                     self.assertEqual(env["RUN_MODE"], mode)
+                    self.assertEqual(env.get("BATCH_TRANSLATOR_WORKER_VARIANT"), "books34" if key in {"book-3", "book-4"} else None)
                     self.assertEqual(env["DOWNLOAD_FOLDER"], api.settings["download_folder"])
                     self.assertEqual(env["PROFILE_DIR"], api.settings["profile_dir"])
                     for other, count in before.items():

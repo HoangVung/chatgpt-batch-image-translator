@@ -46,6 +46,7 @@ Invoke-Python -m PyInstaller `
     --collect-all webview `
     --collect-all playwright `
     --hidden-import run_chatgpt_batch `
+    --hidden-import run_chatgpt_batch_books34 `
     --hidden-import pygetwindow `
     --hidden-import win32process `
     --hidden-import sqlite3 `
