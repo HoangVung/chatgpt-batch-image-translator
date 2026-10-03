@@ -24,6 +24,7 @@ rm -rf "$ROOT/build" "$DIST_APP"
   --add-data "$ROOT/assets/app-icon.png:assets" \
   --collect-all playwright \
   --hidden-import run_chatgpt_batch \
+  --hidden-import run_chatgpt_batch_books34 \
   app.pyw
 
 if [[ ! -d "$DIST_APP" ]]; then

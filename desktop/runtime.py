@@ -223,6 +223,7 @@ def build_process_launch(
     os_name: str | None = None,
     data_dir: Path | None = None,
     settings_file: Path | None = None,
+    session_id: str = "book-1",
 ) -> ProcessLaunch:
     if mode not in {"main", "retry", "force", "login"}:
         raise ValueError("unsupported run mode")
@@ -240,7 +241,11 @@ def build_process_launch(
     )
     settings["profile_dir"] = profile
 
+    variant = "books34" if session_id in {"book-3", "book-4"} and service == "chatgpt" else "stable"
     env = dict(environ or os.environ)
+    env.pop("BATCH_TRANSLATOR_WORKER_VARIANT", None)
+    if variant == "books34":
+        env["BATCH_TRANSLATOR_WORKER_VARIANT"] = variant
     # Never inherit a snapshot belonging to the process that launched this UI.
     env.pop("BATCH_TRANSLATOR_SETTINGS_FILE", None)
     if settings_file is not None:
@@ -266,7 +271,8 @@ def build_process_launch(
         dll_dirs = [app_dir, python_dir, python_dir / "DLLs"]
         env["PATH"] = os.pathsep.join([str(path) for path in dll_dirs if path.exists()] + [env.get("PATH", "")])
 
-    command = [executable, "--worker"] if frozen else [executable, "-u", str(app_dir / "run_chatgpt_batch.py")]
+    script = "run_chatgpt_batch_books34.py" if variant == "books34" else "run_chatgpt_batch.py"
+    command = [executable, "--worker"] if frozen else [executable, "-u", str(app_dir / script)]
     creationflags = subprocess_creationflags(os_name)
     return ProcessLaunch(command, str(app_dir), env, creationflags)
 

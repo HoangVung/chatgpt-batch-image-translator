@@ -126,9 +126,15 @@ class WebBridge:
 
 def run_packaged_worker() -> int:
     try:
-        import run_chatgpt_batch
-
-        return int(run_chatgpt_batch.run_guarded() or 0)
+        import os
+        variant = os.environ.get("BATCH_TRANSLATOR_WORKER_VARIANT", "stable")
+        if variant == "books34":
+            import run_chatgpt_batch_books34 as worker
+        elif variant == "stable":
+            import run_chatgpt_batch as worker
+        else:
+            raise ValueError("Unknown worker variant")
+        return int(worker.run_guarded() or 0)
     except Exception:
         # The parent owns error reporting. An unhandled exception in a
         # windowed EXE would instead leave a blocking PyInstaller dialog.

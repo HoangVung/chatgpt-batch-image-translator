@@ -49,6 +49,16 @@ class SessionManager:
             for key in ("language", "theme"):
                 other.settings[key] = first.settings[key]
 
+        # Setup failures are local to books 3/4; stable workflows remain available.
+        from desktop.books34_setup import reset_book
+        for target_id, template_id in (("book-3", "book-1"), ("book-4", "book-2")):
+            target = self.sessions[target_id]
+            try:
+                reset_book(target, self.sessions[template_id])
+            except Exception as exc:
+                target._books34_setup_error = str(exc)
+                target._append_log("Đặt lại sách chưa hoàn tất: " + str(exc) + "\n")
+
     @staticmethod
     def _configured_resources(settings):
         resources = [{"kind": "profile", "path": p} for p in configured_profiles(settings)]
@@ -68,6 +78,8 @@ class SessionManager:
                     raise ResourceConflict(f"{session_id} / {other_id}: {exc}") from exc
 
     def _prepare_start(self, api, mode):
+        if getattr(api, "_books34_setup_error", None):
+            raise ResourceConflict(api._books34_setup_error)
         if self._closed:
             raise RuntimeError("App is closing")
         if api.controller.state.running:

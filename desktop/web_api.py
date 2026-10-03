@@ -422,7 +422,9 @@ class WebApi:
             DesktopController.parse_auto_next_delay(str(self.settings.get("auto_next_delay_minutes", "")))
         if mode == "login" and self.settings.get("service") != "chatgpt":
             raise ValueError("login is available only for ChatGPT accounts")
-        script = self.app_dir / "run_chatgpt_batch.py"
+        script_name = ("run_chatgpt_batch_books34.py" if self.session_id in {"book-3", "book-4"}
+                       and self.settings.get("service") == "chatgpt" else "run_chatgpt_batch.py")
+        script = self.app_dir / script_name
         if not getattr(sys, "frozen", False) and not script.is_file():
             raise FileNotFoundError(f"worker not found: {script}")
         if self._closed:
@@ -436,7 +438,7 @@ class WebApi:
         self.run_id = uuid.uuid4().hex
         try:
             launch = build_process_launch(self.settings, mode, app_dir=self.app_dir,
-                                          data_dir=self.data_dir, settings_file=self._snapshot_path)
+                                          data_dir=self.data_dir, settings_file=self._snapshot_path, session_id=self.session_id)
             if not self.controller.start(mode, launch, auto_started=auto_started):
                 raise RuntimeError("a batch is already running")
         except BaseException:
