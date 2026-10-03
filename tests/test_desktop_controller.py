@@ -1,11 +1,16 @@
 import json
+import subprocess
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
+
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
+
+from worker_control import STOP_FILE_ENV
 
 from desktop_controller import (
     ACCOUNT_EVENT_PREFIX,
@@ -118,13 +123,16 @@ class DesktopControllerTests(unittest.TestCase):
         self.factory = ProcessFactory()
         self.terminated = []
         self.clock = Clock()
-        return DesktopController(
+        controller = DesktopController(
             self.scheduler,
             popen_factory=self.factory,
             thread_factory=FakeThread,
             monotonic=self.clock,
             process_tree_terminator=self.terminated.append,
         )
+
+        self.addCleanup(lambda: controller._cleanup_stop_file(controller._stop_file))
+        return controller
 
     @staticmethod
     def launch(mode="main"):
@@ -190,8 +198,35 @@ class DesktopControllerTests(unittest.TestCase):
         self.assertEqual(controller.process.stdin.writes, ["\n"])
         self.assertEqual(controller.process.stdin.flush_count, 1)
         self.assertFalse(controller.state.manual_action_required)
-        self.assertTrue(controller.state.current_run_intervened)
+        # A manual login/challenge Continue is part of the normal flow and must
+        # not block auto-next after the batch completes.
+        self.assertFalse(controller.state.current_run_intervened)
         self.assertIn("continue_sent", event_types(controller))
+
+    def test_continue_after_manual_login_keeps_auto_next_running(self):
+        controller = self.make_controller()
+        controller.configure_auto_next(True, 120)
+        controller.start("main", self.launch())
+        controller.drain_events()
+
+        controller.handle_worker_output("MANUAL_ACTION_REQUIRED\n")
+        self.assertTrue(controller.send_continue())
+        self.assertFalse(controller.state.current_run_intervened)
+        controller.drain_events()
+
+        controller.state.current_batch_result = full_success_result()
+        controller.handle_process_done(0)
+        events = controller.drain_events()
+
+        self.assertTrue(controller.state.auto_next_active)
+        self.assertIn("auto_next_scheduled", [event.type for event in events])
+        callback = self.scheduler.calls[-1]["callback"]
+        self.clock.now += 120
+        callback()
+        self.assertIn(
+            "auto_next_start_requested",
+            [event.type for event in controller.drain_events()],
+        )
 
     def test_stop_running_uses_process_tree_terminator_and_stop_idle_is_safe(self):
         controller = self.make_controller()
@@ -205,6 +240,88 @@ class DesktopControllerTests(unittest.TestCase):
         self.assertEqual(self.terminated, [process])
         self.assertTrue(controller.state.current_run_intervened)
         self.assertIn("stopped", event_types(controller))
+
+    def test_launch_uses_unique_local_stop_marker_without_mutating_launch(self):
+        launch = self.launch()
+        launch.env[STOP_FILE_ENV] = "inherited-marker"
+        controller = self.make_controller()
+        controller.start("main", launch)
+        first = Path(self.factory.calls[0][1]["env"][STOP_FILE_ENV])
+        self.assertFalse(first.exists())
+        self.assertEqual(launch.env[STOP_FILE_ENV], "inherited-marker")
+        controller.process.return_code = 0
+        controller.start("main", launch)
+        second = Path(self.factory.calls[1][1]["env"][STOP_FILE_ENV])
+        self.assertNotEqual(first, second)
+
+    def test_stop_waits_for_graceful_exit_before_forcing_and_removes_marker(self):
+        controller = self.make_controller()
+        controller.start("login", self.launch("login"))
+        process = controller.process
+        stop_file = controller._stop_file
+        waited = []
+
+        def graceful_wait(timeout):
+            self.assertTrue(stop_file.is_file())
+            waited.append(timeout)
+            process.return_code = 130
+            return 130
+
+        process.wait = graceful_wait
+        self.assertTrue(controller.stop())
+        self.assertEqual(waited, [10.0])
+        self.assertEqual(self.terminated, [])
+        self.assertFalse(stop_file.exists())
+        self.assertFalse(controller.is_running())
+
+    def test_stop_forces_tree_only_after_timeout(self):
+        controller = self.make_controller()
+        controller.start("main", self.launch())
+        process = controller.process
+
+        def stuck_wait(timeout):
+            self.assertTrue(controller._stop_file.is_file())
+            raise subprocess.TimeoutExpired("worker", timeout)
+
+        process.wait = stuck_wait
+        controller.stop()
+        self.assertEqual(self.terminated, [process])
+
+    def test_stop_falls_back_when_marker_cannot_be_written(self):
+        controller = self.make_controller()
+        controller.start("main", self.launch())
+        process = controller.process
+        with patch.object(Path, "touch", side_effect=PermissionError("denied")):
+            controller.stop()
+        self.assertEqual(self.terminated, [process])
+
+    def test_shutdown_uses_graceful_stop_and_cancels_pending_auto_next(self):
+        controller = self.make_controller()
+        controller.configure_auto_next(True, 120)
+        controller.start("login", self.launch("login"))
+        controller.schedule_auto_next()
+        process = controller.process
+
+        def graceful_wait(timeout):
+            self.assertTrue(controller._stop_file.exists())
+            process.return_code = 130
+            return 130
+
+        process.wait = graceful_wait
+        controller.shutdown()
+        self.assertFalse(controller.state.auto_next_active)
+        self.assertEqual(self.terminated, [])
+
+    def test_output_reader_removes_its_own_stop_marker_after_exit(self):
+        controller = self.make_controller()
+        controller.start("login", self.launch("login"))
+        stop_file = controller._stop_file
+        stop_file.touch()
+        controller.process.return_code = 130
+        controller.read_process_output(controller.process, stop_file)
+        self.assertFalse(stop_file.exists())
+        controller.drain_events()
+        self.assertIsNone(controller._stop_file)
 
     def test_exit_zero_failure_and_missing_result_cleanup_state(self):
         cases = (

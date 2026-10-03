@@ -15,6 +15,10 @@ from datetime import datetime
 from PIL import Image
 from playwright.sync_api import sync_playwright
 from progress_utils import FAILED_STATUSES, read_latest_progress
+from browser_profiles import prepare_profile_dir
+from worker_control import (
+    WorkerStopRequested, check_stop_requested, cooperative_sleep, wait_for_continue,
+)
 
 try:
     import pygetwindow as gw
@@ -283,7 +287,7 @@ class QuotaExhaustedError(RuntimeError):
 
 
 def sleep(s):
-    time.sleep(s)
+    cooperative_sleep(s)
 
 
 def ensure_dirs():
@@ -648,7 +652,7 @@ def wait_if_cloudflare(page):
     print("⚠️ Gặp Cloudflare / Verify you are human.")
     print("👉 Hãy xác minh thủ công trong cửa sổ trình duyệt.")
     print("👉 Khi vào lại được ChatGPT bình thường, quay lại app bấm 'Tiếp tục sau can thiệp'.")
-    input("Chờ app gửi ENTER sau khi xác minh xong... ")
+    wait_for_continue("Chờ app gửi ENTER sau khi xác minh xong... ")
 
     sleep(5)
 
@@ -703,7 +707,25 @@ def wait_page_ready(page, timeout=120):
 def login_if_needed(page, service=SERVICE):
     url = "https://gemini.google.com/app" if service == "gemini" else "https://chatgpt.com/"
     page.goto(url, wait_until="domcontentloaded")
-    wait_if_cloudflare(page)
+
+    # A challenge and sign-in belong to the same manual step. Nested waits here
+    # can consume the first Continue for Cloudflare and then ask for it again.
+    if wait_signed_in_session(page, service=service, timeout=90):
+        print(f"✅ Đã vào được {service.upper()}.")
+        return
+
+    print("\nMANUAL_ACTION_REQUIRED")
+    print(f"⚠️ Cần đăng nhập hoặc xác minh {service.upper()}.")
+    print("👉 Hoàn tất đăng nhập và xác minh trong cửa sổ trình duyệt.")
+    print("👉 Khi thấy ô chat và không còn nút đăng nhập, quay lại app bấm 'Tiếp tục sau can thiệp'.")
+    wait_for_continue("Chờ app gửi ENTER sau khi login xong... ")
+
+    if not wait_signed_in_session(page, service=service, timeout=90):
+        raise Exception(f"{service.upper()} chưa đăng nhập hoặc chưa sẵn sàng sau khi can thiệp.")
+    print(f"✅ Đã vào được {service.upper()}.")
+
+
+def has_signin_prompt(page, service="chatgpt"):
 
     signin_selectors = (
         [
@@ -725,32 +747,45 @@ def login_if_needed(page, service=SERVICE):
             'button:has-text("Đăng nhập")',
         ]
     )
-    has_signin = False
     for selector in signin_selectors:
         try:
-            locator = page.locator(selector).first
-            if locator.count() > 0 and locator.is_visible():
-                has_signin = True
-                break
+            matches = page.locator(selector)
+            for index in range(matches.count()):
+                if matches.nth(index).is_visible():
+                    return True
         except Exception:
             continue
+    return False
 
-    if wait_page_ready(page, 90) and not has_signin:
-        print(f"✅ Đã vào được {service.upper()}.")
-        return
 
-    print("\nMANUAL_ACTION_REQUIRED")
-    print(f"⚠️ Chưa đăng nhập {service.upper()}.")
-    print("👉 Login thủ công trong cửa sổ trình duyệt.")
-    print("👉 Khi thấy ô chat, quay lại app bấm 'Tiếp tục sau can thiệp'.")
-    input("Chờ app gửi ENTER sau khi login xong... ")
+def wait_signed_in_session(page, service="chatgpt", timeout=30):
+    """Poll current auth UI without asking for a second manual intervention."""
+    start = time.monotonic()
+    while time.monotonic() - start < timeout:
+        check_stop_requested()
+        if is_cloudflare(page):
+            return False
 
-    wait_if_cloudflare(page)
-    if not wait_page_ready(page, 90):
-        raise Exception(f"{service.upper()} chưa sẵn sàng sau khi đăng nhập.")
+        has_signin = has_signin_prompt(page, service=service)
+        # The guest page can also have a composer. Allow cookie hydration to
+        # settle, then check the live sign-in controls before accepting it.
+        if time.monotonic() - start >= 4:
+            if has_signin:
+                return False
+            try:
+                prompt = get_prompt_locator(page)
+                if prompt.count() > 0 and prompt.first.is_visible():
+                    return True
+            except Exception:
+                pass
+        sleep(1)
+    return False
 
 
 def launch_persistent_context(playwright, profile_dir):
+    check_stop_requested()
+    profile_dir = str(prepare_profile_dir(profile_dir))
+    check_stop_requested()
     return playwright.chromium.launch_persistent_context(
         user_data_dir=profile_dir,
         headless=False,
@@ -762,42 +797,9 @@ def launch_persistent_context(playwright, profile_dir):
     )
 
 
-def has_signin_prompt(page):
-    selectors = [
-        'a:has-text("Log in")',
-        'button:has-text("Log in")',
-        'a:has-text("Đăng nhập")',
-        'button:has-text("Đăng nhập")',
-    ]
-    for selector in selectors:
-        try:
-            locator = page.locator(selector).first
-            if locator.count() > 0 and locator.is_visible():
-                return True
-        except Exception:
-            continue
-    return False
-
-
 def wait_existing_chatgpt_session(page, timeout=30):
     """Check a prepared profile without pausing for manual login."""
-    start = time.time()
-    while time.time() - start < timeout:
-        wait_if_cloudflare(page)
-
-        try:
-            prompt = get_prompt_locator(page)
-            if prompt.count() > 0 and prompt.first.is_visible():
-                return True
-        except Exception:
-            pass
-
-        # Cho phép một khoảng đệm 4 giây để Next.js/React hydrate phiên cookie trước khi kết luận là chưa login
-        if time.time() - start >= 4 and has_signin_prompt(page):
-            return False
-
-        sleep(1)
-    return False
+    return wait_signed_in_session(page, timeout=timeout)
 
 
 def open_existing_chatgpt_account(playwright, account):
@@ -813,6 +815,9 @@ def open_existing_chatgpt_account(playwright, account):
             minimize_own_browser(context)
             return context, page
         print(f"⚠ Bỏ qua {account['name']}: profile chưa đăng nhập hoặc chưa sẵn sàng")
+    except WorkerStopRequested:
+        close_browser_context(context)
+        raise
     except Exception as exc:
         print(f"⚠ Bỏ qua {account['name']}: không mở được phiên ({type(exc).__name__})")
 
@@ -835,17 +840,11 @@ def login_only():
     print(f"🔐 Mở phiên đăng nhập {SERVICE.upper()}.")
 
     with sync_playwright() as p:
+        check_stop_requested()
         context = None
         try:
-            context = p.chromium.launch_persistent_context(
-                user_data_dir=PROFILE_DIR,
-                headless=False,
-                accept_downloads=True,
-                args=[
-                    "--disable-blink-features=AutomationControlled"
-                ],
-                viewport={"width": 1400, "height": 900}
-            )
+            context = launch_persistent_context(p, PROFILE_DIR)
+            check_stop_requested()
             page = context.pages[0] if context.pages else context.new_page()
             # Keep this browser visible: the user needs it to complete sign-in.
             login_if_needed(page)
@@ -2498,9 +2497,11 @@ def main():
     batch_loop_finished = False
     try:
         with sync_playwright() as p:
+            check_stop_requested()
             context = None
             try:
                 context = launch_persistent_context(p, PROFILE_DIR)
+                check_stop_requested()
 
                 page = context.pages[0] if context.pages else context.new_page()
 
@@ -2725,11 +2726,16 @@ def run_guarded():
     settings = dict(CFG, image_folder=IMAGE_FOLDER, download_folder=DOWNLOAD_FOLDER,
                     profile_dir=PROFILE_DIR, service=SERVICE)
     # Protect the complete fallback pool, not just the first browser.
-    with ResourceLease(workflow_resources(settings, RUN_MODE)):
-        if RUN_MODE != "login":
-            validate_output_names(get_images(), get_output_name)
-            claim_output(settings)
-        return main()
+    try:
+        check_stop_requested()
+        with ResourceLease(workflow_resources(settings, RUN_MODE)):
+            if RUN_MODE != "login":
+                validate_output_names(get_images(), get_output_name)
+                claim_output(settings)
+            return main()
+    except WorkerStopRequested:
+        print("Đã dừng tác vụ và đóng phiên trình duyệt.")
+        return 130
 
 
 if __name__ == "__main__":

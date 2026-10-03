@@ -15,6 +15,8 @@ import uuid
 from contextlib import contextmanager
 from pathlib import Path
 
+from browser_profiles import effective_profile_dir
+
 
 class ResourceConflict(ValueError):
     pass
@@ -36,14 +38,16 @@ def overlaps(left, right):
 def configured_profiles(settings):
     values = [a.get("profile_dir") for a in settings.get("chatgpt_accounts", [])]
     values += [settings.get("profile_dir"), settings.get("gemini_profile_dir")]
-    return sorted({canonical_path(p) for p in values if p})
+    return sorted({canonical_path(path) for p in values if p
+                   for path in (p, effective_profile_dir(p))})
 
 
 def workflow_resources(settings, mode="main"):
     active = canonical_path(settings.get("profile_dir"))
-    profiles = {active}
+    profiles = {active, canonical_path(effective_profile_dir(settings.get("profile_dir")))}
     if mode != "login" and settings.get("service", "chatgpt") == "chatgpt" and settings.get("auto_account_fallback_enabled", True):
-        profiles.update(canonical_path(a["profile_dir"]) for a in settings.get("chatgpt_accounts", []))
+        profiles.update(canonical_path(path) for a in settings.get("chatgpt_accounts", [])
+                        for path in (a["profile_dir"], effective_profile_dir(a["profile_dir"])))
     result = [{"kind": "profile", "path": p} for p in sorted(profiles)]
     if mode != "login":
         result += [{"kind": "source", "path": canonical_path(settings.get("image_folder"))},

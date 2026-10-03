@@ -7,12 +7,17 @@ import math
 import os
 import queue
 import subprocess
+import tempfile
+import uuid
 import threading
 import time
 from collections import deque
 from dataclasses import dataclass
 from typing import Any, Callable
 from functools import wraps
+from pathlib import Path
+
+from worker_control import STOP_FILE_ENV
 
 
 BATCH_RESULT_PREFIX = "__BATCH_RESULT__="
@@ -72,6 +77,7 @@ class DesktopController:
         thread_factory: Callable[..., Any] = threading.Thread,
         monotonic: Callable[[], float] = time.monotonic,
         process_tree_terminator: Callable[[Any], None] | None = None,
+        graceful_stop_timeout: float = 10.0,
     ) -> None:
         self.scheduler = scheduler
         self._lock = threading.RLock()
@@ -82,6 +88,8 @@ class DesktopController:
         self._thread_factory = thread_factory
         self._monotonic = monotonic
         self._process_tree_terminator = process_tree_terminator or self._terminate_process_tree
+        self._graceful_stop_timeout = graceful_stop_timeout
+        self._stop_file: Path | None = None
         self._reader_queue: queue.Queue[tuple[Any, ...]] = queue.Queue()
         self._events: deque[ControllerEvent] = deque()
         self._auto_next_handle: Any | None = None
@@ -114,6 +122,10 @@ class DesktopController:
             self.cancel_auto_next()
             self.state.retry_stalled_rounds = 0
 
+        # Control files live on local temp storage even when the app is on Drive.
+        stop_file = Path(tempfile.gettempdir()) / f"batch-translator-stop-{uuid.uuid4().hex}"
+        env = dict(launch.env)
+        env[STOP_FILE_ENV] = str(stop_file)
         process = self._popen_factory(
             launch.command,
             cwd=launch.cwd,
@@ -123,12 +135,13 @@ class DesktopController:
             text=True,
             encoding="utf-8",
             errors="replace",
-            env=launch.env,
+            env=env,
             bufsize=1,
             creationflags=launch.creationflags,
         )
 
         self.process = process
+        self._stop_file = stop_file
         self.state.running = True
         self.state.progress_done = 0
         self.state.progress_total = 0
@@ -141,13 +154,13 @@ class DesktopController:
 
         reader = self._thread_factory(
             target=self.read_process_output,
-            args=(process,),
+            args=(process, stop_file),
             daemon=True,
         )
         reader.start()
         return True
 
-    def read_process_output(self, process: Any) -> None:
+    def read_process_output(self, process: Any, stop_file: Path | None = None) -> None:
         try:
             for line in process.stdout:
                 self._reader_queue.put(("line", line, process))
@@ -155,6 +168,7 @@ class DesktopController:
             self._reader_queue.put(("reader_error", str(exc), process))
         finally:
             code = process.wait()
+            self._cleanup_stop_file(stop_file)
             self._reader_queue.put(("line", f"\n=== KẾT THÚC, EXIT CODE: {code} ===\n", process))
             self._reader_queue.put(("done", process, code))
 
@@ -259,7 +273,9 @@ class DesktopController:
             self._emit("continue_error", error=exc)
             return False
 
-        self.state.current_run_intervened = True
+        # Continuing a manual login/challenge step is part of the normal flow.
+        # It must not block auto-next; only an explicit Stop or a run
+        # configuration change marks the run as intervened.
         self.state.manual_action_required = False
         self._emit("continue_sent")
         return True
@@ -268,7 +284,7 @@ class DesktopController:
         cancelled_auto_run = self.cancel_auto_next(announce=True)
         if self.is_running():
             self.state.current_run_intervened = True
-            self._process_tree_terminator(self.process)
+            self._stop_process(self.process)
             self.state.manual_action_required = False
             self._emit("stopped")
             return True
@@ -280,6 +296,37 @@ class DesktopController:
         self.cancel_auto_next()
         if self.is_running():
             self.stop()
+
+    def _stop_process(self, process: Any) -> None:
+        """Give browser finalizers a chance to flush the persistent profile."""
+        if self._stop_file is not None:
+            try:
+                self._stop_file.touch()
+                # Release a stdin reader waiting for manual login. The marker
+                # wins over EOF, and the worker can unwind its browser safely.
+                close_stdin = getattr(getattr(process, "stdin", None), "close", None)
+                if callable(close_stdin):
+                    try:
+                        close_stdin()
+                    except OSError:
+                        pass
+                process.wait(timeout=self._graceful_stop_timeout)
+                self._cleanup_stop_file(self._stop_file)
+                return
+            except (OSError, AttributeError, TypeError, subprocess.TimeoutExpired):
+                # A stuck browser call or an older worker still needs bounded
+                # cleanup. Never call Playwright from a cancellation thread.
+                pass
+        self._process_tree_terminator(process)
+
+    @staticmethod
+    def _cleanup_stop_file(stop_file: Path | None) -> None:
+        if stop_file is None:
+            return
+        try:
+            stop_file.unlink(missing_ok=True)
+        except OSError:
+            pass
 
     def cancel_auto_next(self, announce: bool = False) -> bool:
         active = self.state.auto_next_active or self._auto_next_handle is not None
@@ -414,10 +461,10 @@ class DesktopController:
         return "", {}
 
     def handle_process_done(self, exit_code: int) -> None:
+        self._cleanup_stop_file(self._stop_file)
+        self._stop_file = None
         self.process = None
         self.state.running = False
-        if self.state.manual_action_required:
-            self.state.current_run_intervened = True
         self.state.manual_action_required = False
         self._emit("process_completed", exit_code=exit_code)
 

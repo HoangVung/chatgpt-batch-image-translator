@@ -42,6 +42,10 @@ class GuardTests(unittest.TestCase):
         path = self.root / (str(len(self.children)) + "-settings.json")
         save_settings(path, cfg)
         env = dict(os.environ, BATCH_TRANSLATOR_SETTINGS_FILE=str(path), PYTHONIOENCODING="utf-8")
+        # Keep browser-profile preparation inside the test root when the worker
+        # runs on Windows; otherwise prepare_profile_dir would write to the real
+        # %LOCALAPPDATA% folder.
+        env["LOCALAPPDATA"] = str(self.root / "local")
         for key in ("IMAGE_FOLDER", "DOWNLOAD_FOLDER", "PROFILE_DIR", "SERVICE", "RUN_MODE", "START_FROM", "BATCH_SIZE", "AUTO_ACCOUNT_FALLBACK_ENABLED"):
             env.pop(key, None)
         child = subprocess.Popen([sys.executable, "-u", str(ROOT / "tests/fixtures/parallel_worker.py"), str(self.root / "locks")],
