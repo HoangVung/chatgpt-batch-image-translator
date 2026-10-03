@@ -705,10 +705,15 @@ def is_gemini_authenticated(page):
     """Xác định tài khoản Gemini đã thực sự đăng nhập hay chưa."""
     try:
         sign_in_selectors = [
+            'button:has-text("Sign in")',
+            'button:has-text("Đăng nhập")',
+            'a:has-text("Sign in")',
+            'a:has-text("Đăng nhập")',
             '.mavatar-sign-in-button',
             'a[href*="accounts.google.com/ServiceLogin"]',
             'a[href*="accounts.google.com/signin"]',
             'a:has-text("Sign in to save activity")',
+            'a:has-text("Đăng nhập để lưu hoạt động")',
         ]
         for sel in sign_in_selectors:
             loc = page.locator(sel).first
@@ -718,11 +723,12 @@ def is_gemini_authenticated(page):
         account_selectors = [
             'a[aria-label*="Tài khoản Google" i]',
             'a[aria-label*="Google Account" i]',
+            'button[aria-label*="Tài khoản Google" i]',
+            'button[aria-label*="Google Account" i]',
+            'img[alt*="Tài khoản Google" i]',
+            'img[alt*="Google Account" i]',
             '.mavatar-footer-left',
-            'button[aria-label*="Cài đặt" i]',
-            'button[aria-label*="Settings" i]',
-            'a[aria-label*="Cuộc trò chuyện mới" i]',
-            'a[aria-label*="New chat" i]',
+            '[data-test-id="ogb-profile-button"]',
         ]
         for sel in account_selectors:
             loc = page.locator(sel).first
@@ -934,27 +940,44 @@ def upload_image(page, img, service=SERVICE):
         except Exception:
             pass
 
-        composer = get_gemini_composer(page)
-        plus_clicked = click_gemini_named_control(composer, GEMINI_TOOLS_MENU_NAME)
+        composer = None
+        try:
+            composer = get_gemini_composer(page)
+        except Exception:
+            pass
+
+        search_roots = [composer, page] if composer is not None else [page]
+        plus_clicked = False
+        for root in search_roots:
+            if click_gemini_named_control(root, GEMINI_TOOLS_MENU_NAME):
+                plus_clicked = True
+                break
+
         if not plus_clicked:
-            for sel in [
-                'button[aria-label*="Nội dung tải lên" i]',
-                'button[aria-label*="Upload" i]',
-                'button[aria-label*="tải lên" i]',
-                'button[aria-label*="công cụ" i]',
-                'button[aria-label*="tool" i]',
-                'button[aria-label*="Add files" i]',
-                'button[aria-label*="Thêm" i]',
-            ]:
-                try:
-                    btn = composer.locator(sel).first
-                    if btn.count() > 0 and btn.is_visible():
-                        btn.click(timeout=3000, force=True)
-                        plus_clicked = True
-                        sleep(1.5)
-                        break
-                except Exception:
-                    continue
+            for root in search_roots:
+                for sel in [
+                    'button[aria-label*="Upload & tools" i]',
+                    'button[aria-label*="Upload and tools" i]',
+                    'button[aria-label*="Nội dung tải lên và công cụ" i]',
+                    'button[aria-label*="Nội dung tải lên" i]',
+                    'button[aria-label*="Upload" i]',
+                    'button[aria-label*="tải lên" i]',
+                    'button[aria-label*="công cụ" i]',
+                    'button[aria-label*="tool" i]',
+                    'button[aria-label*="Add files" i]',
+                    'button[aria-label*="Thêm" i]',
+                ]:
+                    try:
+                        btn = root.locator(sel).first
+                        if btn.count() > 0 and btn.is_visible():
+                            btn.click(timeout=3000, force=True)
+                            plus_clicked = True
+                            sleep(1.5)
+                            break
+                    except Exception:
+                        continue
+                if plus_clicked:
+                    break
 
         if not plus_clicked:
             raise Exception("Không tìm thấy nút Plus / Menu công cụ để tải ảnh lên Gemini")
