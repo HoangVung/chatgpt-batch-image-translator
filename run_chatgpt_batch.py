@@ -897,49 +897,6 @@ def login_only():
     ensure_profile_dir()
     print(f"🔐 Mở phiên đăng nhập {SERVICE.upper()}.")
 
-    if SERVICE == "gemini":
-        chrome_exe = find_chrome_executable()
-        if chrome_exe and not os.environ.get("BATCH_TEST_BROWSER"):
-            print("🌐 Khởi chạy Google Chrome nguyên bản để đăng nhập tài khoản Google / Gemini an toàn...")
-            print("\nMANUAL_ACTION_REQUIRED")
-            print("👉 Hãy chọn và đăng nhập tài khoản Google trên cửa sổ Chrome vừa mở.")
-            print("👉 Sau khi thấy giao diện chat Gemini, quay lại app bấm 'Tiếp tục sau can thiệp'.")
-
-            proc = subprocess.Popen([
-                chrome_exe,
-                f"--user-data-dir={PROFILE_DIR}",
-                "--no-first-run",
-                "--no-default-browser-check",
-                "https://gemini.google.com/app",
-            ])
-            try:
-                input("Chờ app gửi ENTER sau khi login xong... ")
-            except Exception:
-                pass
-
-            try:
-                proc.terminate()
-                proc.wait(timeout=5)
-            except Exception:
-                pass
-
-            with sync_playwright() as p:
-                context = None
-                try:
-                    context = launch_persistent_context(p, PROFILE_DIR)
-                    page = context.pages[0] if context.pages else context.new_page()
-                    page.goto("https://gemini.google.com/app", wait_until="domcontentloaded")
-                    sleep(2)
-                    if is_gemini_authenticated(page):
-                        print("✅ Đã xác nhận đăng nhập GEMINI.")
-                        print(f"✅ Phiên {SERVICE.upper()} đã sẵn sàng.")
-                    else:
-                        print("⚠️ Chưa phát hiện đăng nhập hoàn tất. Bạn có thể bấm 'Đăng nhập' để thử lại.")
-                finally:
-                    if context is not None:
-                        context.close()
-            return 0
-
     with sync_playwright() as p:
         context = None
         try:
