@@ -813,9 +813,7 @@ def launch_persistent_context(playwright, profile_dir):
         "accept_downloads": True,
         "chromium_sandbox": True,
         "ignore_default_args": ["--enable-automation"],
-        "args": [
-            "--disable-blink-features=AutomationControlled",
-        ],
+        "args": [],
         "viewport": {"width": 1400, "height": 900},
     }
     if not os.environ.get("BATCH_TEST_BROWSER"):
