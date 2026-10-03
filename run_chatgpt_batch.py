@@ -193,7 +193,6 @@ SEND_VERIFY_TIMEOUT = 45
 PROMPT_CHEP_LAI = "chép lại nguyên văn"
 PROMPT_DICH = "dịch bản chép lại"
 PROMPT_TAO_ANH = "Tạo ảnh với bản dịch"
-PROMPT_TAO_ANH_GEMINI = "tạo ảnh gốc từ bản dịch"
 
 IMAGE_QUOTA_MARKERS = (
     "Bạn đã hết lượt tạo hình ảnh",
@@ -701,74 +700,31 @@ def wait_page_ready(page, timeout=120):
     return False
 
 
-def is_gemini_authenticated(page):
-    """Xác định tài khoản Gemini đã thực sự đăng nhập hay chưa."""
-    try:
-        sign_in_selectors = [
-            'button:has-text("Sign in")',
-            'button:has-text("Đăng nhập")',
-            'a:has-text("Sign in")',
-            'a:has-text("Đăng nhập")',
-            '.mavatar-sign-in-button',
-            'a[href*="accounts.google.com/ServiceLogin"]',
-            'a[href*="accounts.google.com/signin"]',
-            'a:has-text("Sign in to save activity")',
-            'a:has-text("Đăng nhập để lưu hoạt động")',
-        ]
-        for sel in sign_in_selectors:
-            loc = page.locator(sel).first
-            if loc.count() > 0 and loc.is_visible():
-                return False
-
-        account_selectors = [
-            'a[aria-label*="Tài khoản Google" i]',
-            'a[aria-label*="Google Account" i]',
-            'button[aria-label*="Tài khoản Google" i]',
-            'button[aria-label*="Google Account" i]',
-            'img[alt*="Tài khoản Google" i]',
-            'img[alt*="Google Account" i]',
-            '.mavatar-footer-left',
-            '[data-test-id="ogb-profile-button"]',
-        ]
-        for sel in account_selectors:
-            loc = page.locator(sel).first
-            if loc.count() > 0 and loc.is_visible():
-                return True
-    except Exception:
-        pass
-    return False
-
-
 def login_if_needed(page, service=SERVICE):
     url = "https://gemini.google.com/app" if service == "gemini" else "https://chatgpt.com/"
     page.goto(url, wait_until="domcontentloaded")
     wait_if_cloudflare(page)
 
-    if service == "gemini":
-        sleep(2)
-        if is_gemini_authenticated(page):
-            print("✅ Đã vào được GEMINI.")
-            return
-
-        print("\nMANUAL_ACTION_REQUIRED")
-        print("⚠️ Chưa đăng nhập GEMINI.")
-        print("👉 Đăng nhập tài khoản Google / Gemini trong cửa sổ trình duyệt.")
-        print("👉 Sau khi đăng nhập thành công và thấy giao diện chat Gemini, quay lại app bấm 'Tiếp tục sau can thiệp'.")
-        input("Chờ app gửi ENTER sau khi login xong... ")
-
-        wait_if_cloudflare(page)
-        sleep(2)
-        if not is_gemini_authenticated(page) and not wait_page_ready(page, 30):
-            raise Exception("GEMINI chưa sẵn sàng sau khi đăng nhập.")
-        print("✅ Đã xác nhận đăng nhập GEMINI.")
-        return
-
-    signin_selectors = [
-        'a:has-text("Log in")',
-        'button:has-text("Log in")',
-        'a:has-text("Đăng nhập")',
-        'button:has-text("Đăng nhập")',
-    ]
+    signin_selectors = (
+        [
+            '.sign-in-button',
+            'a:has-text("Sign in")',
+            'button:has-text("Sign in")',
+            'a:has-text("Đăng nhập")',
+            'button:has-text("Đăng nhập")',
+            'a:has-text("Get started")',
+            'button:has-text("Get started")',
+            'a:has-text("Bắt đầu")',
+            'button:has-text("Bắt đầu")',
+        ]
+        if service == "gemini"
+        else [
+            'a:has-text("Log in")',
+            'button:has-text("Log in")',
+            'a:has-text("Đăng nhập")',
+            'button:has-text("Đăng nhập")',
+        ]
+    )
     has_signin = False
     for selector in signin_selectors:
         try:
@@ -794,33 +750,16 @@ def login_if_needed(page, service=SERVICE):
         raise Exception(f"{service.upper()} chưa sẵn sàng sau khi đăng nhập.")
 
 
-def find_chrome_executable():
-    chrome_candidates = [
-        r"C:\Program Files\Google\Chrome\Application\chrome.exe",
-        r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
-        os.path.expandvars(r"%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe"),
-    ]
-    for p in chrome_candidates:
-        if os.path.exists(p):
-            return p
-    return None
-
-
 def launch_persistent_context(playwright, profile_dir):
-    kwargs = {
-        "user_data_dir": profile_dir,
-        "headless": False,
-        "accept_downloads": True,
-        "chromium_sandbox": True,
-        "ignore_default_args": ["--enable-automation"],
-        "args": [],
-        "viewport": {"width": 1400, "height": 900},
-    }
-    if not os.environ.get("BATCH_TEST_BROWSER"):
-        if find_chrome_executable():
-            kwargs["channel"] = "chrome"
-
-    return playwright.chromium.launch_persistent_context(**kwargs)
+    return playwright.chromium.launch_persistent_context(
+        user_data_dir=profile_dir,
+        headless=False,
+        accept_downloads=True,
+        args=[
+            "--disable-blink-features=AutomationControlled"
+        ],
+        viewport={"width": 1400, "height": 900}
+    )
 
 
 def has_signin_prompt(page):
@@ -898,7 +837,15 @@ def login_only():
     with sync_playwright() as p:
         context = None
         try:
-            context = launch_persistent_context(p, PROFILE_DIR)
+            context = p.chromium.launch_persistent_context(
+                user_data_dir=PROFILE_DIR,
+                headless=False,
+                accept_downloads=True,
+                args=[
+                    "--disable-blink-features=AutomationControlled"
+                ],
+                viewport={"width": 1400, "height": 900}
+            )
             page = context.pages[0] if context.pages else context.new_page()
             # Keep this browser visible: the user needs it to complete sign-in.
             login_if_needed(page)
@@ -933,9 +880,6 @@ def reset_chat(page, service=SERVICE):
 
 def upload_image(page, img, service=SERVICE):
     if service == "gemini":
-        if not is_gemini_authenticated(page):
-            raise Exception("Tài khoản Gemini chưa đăng nhập hoặc phiên đã hết hạn. Hãy bấm 'Đăng nhập' tài khoản Gemini trên app.")
-
         try:
             input_el = page.locator('input[type="file"]').first
             if input_el.count() > 0:
@@ -946,47 +890,28 @@ def upload_image(page, img, service=SERVICE):
         except Exception:
             pass
 
-        composer = None
-        try:
-            composer = get_gemini_composer(page)
-        except Exception:
-            pass
+        plus_selectors = [
+            'button[aria-label*="Nội dung tải lên" i]',
+            'button[aria-label*="Uploads" i]',
+            'button[aria-label*="Add files" i]',
+            'button[aria-label*="Thêm" i]',
+            'button:has(svg)'
+        ]
 
-        search_roots = [composer, page] if composer is not None else [page]
         plus_clicked = False
-        for root in search_roots:
-            if click_gemini_named_control(root, GEMINI_TOOLS_MENU_NAME):
-                plus_clicked = True
-                break
-
-        if not plus_clicked:
-            for root in search_roots:
-                for sel in [
-                    'button[aria-label*="Upload & tools" i]',
-                    'button[aria-label*="Upload and tools" i]',
-                    'button[aria-label*="Nội dung tải lên và công cụ" i]',
-                    'button[aria-label*="Nội dung tải lên" i]',
-                    'button[aria-label*="Upload" i]',
-                    'button[aria-label*="tải lên" i]',
-                    'button[aria-label*="công cụ" i]',
-                    'button[aria-label*="tool" i]',
-                    'button[aria-label*="Add files" i]',
-                    'button[aria-label*="Thêm" i]',
-                ]:
-                    try:
-                        btn = root.locator(sel).first
-                        if btn.count() > 0 and btn.is_visible():
-                            btn.click(timeout=3000, force=True)
-                            plus_clicked = True
-                            sleep(1.5)
-                            break
-                    except Exception:
-                        continue
-                if plus_clicked:
+        for sel in plus_selectors:
+            try:
+                btn = page.locator(sel).first
+                if btn.count() > 0 and btn.is_visible():
+                    btn.click(timeout=3000, force=True)
+                    plus_clicked = True
+                    sleep(2)
                     break
+            except Exception:
+                continue
 
         if not plus_clicked:
-            raise Exception("Không tìm thấy nút Plus / Menu công cụ để tải ảnh lên Gemini")
+            raise Exception("Không tìm thấy nút Plus (+) để mở menu tải lên của Gemini")
 
         sub_selectors = [
             'button:has-text("Lựa chọn tải lên khác")',
@@ -999,13 +924,12 @@ def upload_image(page, img, service=SERVICE):
                 btn = page.locator(sel).first
                 if btn.count() > 0 and btn.is_visible():
                     btn.click(timeout=3000, force=True)
-                    sleep(1.5)
+                    sleep(2)
                     break
             except Exception:
                 continue
 
         upload_btn_selectors = [
-            'button[data-test-id="local-images-files-uploader-button"]',
             'button[aria-label*="Tải tệp lên" i]',
             'button:has-text("Tải tệp lên")',
             'button[aria-label*="Upload file" i]',
@@ -1761,7 +1685,7 @@ def get_generation_quota_evidence(page, before_signature=None):
     return None
 
 
-def raise_image_quota_error(page, evidence, before_signature, service_name="ChatGPT"):
+def raise_image_quota_error(page, evidence, before_signature):
     """Allow a short bounded wait for the reset sentence to finish streaming."""
     unchanged = 0
     for _ in range(10):
@@ -1774,7 +1698,7 @@ def raise_image_quota_error(page, evidence, before_signature, service_name="Chat
                 break
         else:
             unchanged = 0
-    print(f"⚠ {service_name} báo đã hết lượt tạo ảnh")
+    print("⚠ ChatGPT báo đã hết lượt tạo ảnh")
     raise QuotaExhaustedError(evidence)
 
 
@@ -2123,204 +2047,26 @@ def wait_image_generation_finished_or_image_ready(
     return None
 
 
-GEMINI_IMAGE_TOOL_NAME = re.compile(
-    r"^(?:create images?|generate images?|image generation|images?|"
-    r"tạo (?:hình )?ảnh|hình ảnh|ảnh)(?:\s|$)", re.IGNORECASE
-)
-GEMINI_TOOLS_MENU_NAME = re.compile(
-    r"^(?:tools|open tools(?: menu)?|công cụ|mở (?:menu |trình đơn )?công cụ|"
-    r"nội dung tải lên và công cụ|tải lên và công cụ|thêm tệp và công cụ|"
-    r"uploads?(?: and| &)? tools?|add files?(?: and| &)? tools?)$",
-    re.IGNORECASE,
-)
-
-
-def get_gemini_composer(page):
-    """Keep selected-tool checks out of chat history and menu options."""
-    prompt = get_prompt_locator(page)
-    for ancestor in (
-        "input-area-v2", "input-area",
-        "*[contains(concat(' ', normalize-space(@class), ' '), ' input-area-container ')]",
-        "*[contains(concat(' ', normalize-space(@class), ' '), ' input-area ')]",
-        "input-container", "form", '*[@data-testid="composer"]',
-    ):
-        root = prompt.locator("xpath=ancestor::" + ancestor).first
-        if root.count() > 0:
-            return root
-    raise RuntimeError("Không xác định được vùng nhập của Gemini để xác nhận công cụ ảnh.")
-
-
-def gemini_image_tool_selected(page):
-    composer = get_gemini_composer(page)
-    return composer.evaluate(r"""
-        (root) => {
-            const imageLabel = /^(?:(?:remove|deselect|bỏ chọn|xóa)\s+)?(?:create images?|generate images?|image generation|images?|tạo (?:hình )?ảnh|hình ảnh|ảnh)(?:\s+(?:mode|tool))?(?:[,.]?\s+(?:selected|click to|đã chọn|nhấn để).*)?$/i;
-            const candidates = root.querySelectorAll(
-                '[aria-pressed="true"], [aria-selected="true"], [data-selected="true"], ' +
-                '[data-state="active"], .selected, .is-selected, .tool-chip, .selected-tool, ' +
-                '.input-area-switch, .input-area-switch-label, .toolbox-drawer-button, ' +
-                '[data-test-id*="tool-chip"], [data-testid*="tool-chip"], ' +
-                'button[aria-label*="Deselect" i], button[aria-label*="Bỏ chọn" i], ' +
-                'button[aria-label*="Remove" i]'
-            );
-            return Array.from(candidates).some((node) => {
-                if (node.closest('[role="menu"], [role="listbox"], .cdk-overlay-pane, .toolbox-drawer'))
-                    return false;
-                const control = node.closest('button, [role="button"]') || node;
-                if (control.getAttribute('aria-pressed') === 'false' ||
-                    control.getAttribute('aria-selected') === 'false') return false;
-                const rect = node.getBoundingClientRect();
-                const style = window.getComputedStyle(node);
-                if (!rect.width || !rect.height || style.visibility === 'hidden' ||
-                    style.display === 'none' || node.closest('[hidden], [aria-hidden="true"]'))
-                    return false;
-                const copy = node.cloneNode(true);
-                copy.querySelectorAll('mat-icon, svg, .material-icons, .material-symbols-outlined')
-                    .forEach((icon) => icon.remove());
-                const labels = [node.getAttribute('aria-label'), control.getAttribute('aria-label'),
-                    copy.textContent].filter(Boolean);
-                return labels.some((label) => imageLabel.test(label.replace(/\s+/g, ' ').trim()));
-            });
-        }
-    """)
-
-
-def click_gemini_named_control(scope, name, roles=("button",)):
-    for role in roles:
-        controls = scope.get_by_role(role, name=name)
-        for index in range(controls.count()):
-            control = controls.nth(index)
-            if control.evaluate("""el => !!el.closest(
-                'model-response, user-query, message-content, .model-response-text, ' +
-                '.message-content, [data-message-author-role], [data-turn], ' +
-                '[data-testid^="conversation-turn-"]'
-            )"""):
-                continue
-            if control.is_visible() and control.is_enabled():
-                control.click(timeout=5000)
-                return True
-    return False
-
-
-def ensure_gemini_normal_chat(page):
-    """Đảm bảo ô chat Gemini ở chế độ chat thông thường (không chọn công cụ tạo ảnh)."""
-    try:
-        if not gemini_image_tool_selected(page):
-            return
-        print("→ Bỏ chọn công cụ tạo ảnh để thực hiện chat/dịch thông thường")
-        composer = get_gemini_composer(page)
-        composer.evaluate(r"""
-            (root) => {
-                const deselectBtn = root.querySelector(
-                    'button[aria-label*="Deselect" i], button[aria-label*="Bỏ chọn" i], ' +
-                    'button[aria-label*="Remove" i], .tool-chip mat-icon, .tool-chip button'
-                );
-                if (deselectBtn) {
-                    deselectBtn.click();
-                    return;
-                }
-                const activeTool = root.querySelector('[aria-pressed="true"], .tool-chip, .selected');
-                if (activeTool) {
-                    activeTool.click();
-                }
-            }
-        """)
-        sleep(0.5)
-    except Exception:
-        pass
-
-
-def ensure_gemini_image_tool(page, timeout=15):
-    """Select image generation and confirm its composer chip before entering a prompt."""
-    print("→ Chọn công cụ tạo ảnh của Gemini")
-    if not wait_prompt_ready(page, timeout=60):
-        raise RuntimeError("Ô nhập Gemini chưa sẵn sàng để chọn công cụ tạo ảnh.")
-    if gemini_image_tool_selected(page):
-        print("✓ Công cụ tạo ảnh của Gemini đã được chọn")
-        return
-
-    composer = get_gemini_composer(page)
-    # Some layouts expose the image tool directly beside the prompt.
-    selected = click_gemini_named_control(composer, GEMINI_IMAGE_TOOL_NAME)
-    if not selected:
-        clicked_menu = click_gemini_named_control(composer, GEMINI_TOOLS_MENU_NAME)
-        if not clicked_menu:
-            for sel in [
-                'button[aria-label*="công cụ" i]',
-                'button[aria-label*="tool" i]',
-                'button[aria-label*="nội dung tải lên" i]',
-                'button[aria-label*="tải lên" i]',
-            ]:
-                try:
-                    btn = composer.locator(sel).first
-                    if btn.count() > 0 and btn.is_visible() and btn.is_enabled():
-                        btn.click(timeout=3000)
-                        clicked_menu = True
-                        break
-                except Exception:
-                    pass
-
-        if not clicked_menu:
-            raise RuntimeError("Không tìm thấy nút Công cụ / Tools của Gemini; chưa gửi prompt tạo ảnh.")
-
-        # Angular menus may be rendered in an overlay outside the composer.
-        start = time.monotonic()
-        while time.monotonic() - start < timeout:
-            if click_gemini_named_control(
-                page, GEMINI_IMAGE_TOOL_NAME,
-                ("menuitem", "menuitemcheckbox", "option", "button", "checkbox")
-            ):
-                selected = True
-                break
-            try:
-                item = page.locator('[role*="menuitem"], button').filter(
-                    has_text=re.compile(r"^(?:tạo (?:hình )?ảnh|create images?)$", re.IGNORECASE)
-                ).first
-                if item.count() > 0 and item.is_visible() and item.is_enabled():
-                    item.click(timeout=3000)
-                    selected = True
-                    break
-            except Exception:
-                pass
-            sleep(0.5)
-    if selected:
-        start = time.monotonic()
-        while time.monotonic() - start < timeout:
-            if gemini_image_tool_selected(page):
-                print("✓ Đã xác nhận công cụ tạo ảnh của Gemini")
-                return
-            sleep(0.5)
-    raise RuntimeError(
-        "Không xác nhận được công cụ Tạo ảnh / Create images của Gemini; chưa gửi prompt tạo ảnh. "
-        "Kiểm tra công cụ ảnh trong tài khoản hoặc giao diện Gemini."
-    )
-
-
 def try_create_image(page, old_imgs):
-    prompt_text = PROMPT_TAO_ANH_GEMINI if SERVICE == "gemini" else PROMPT_TAO_ANH
-    service_name = "Gemini" if SERVICE == "gemini" else "ChatGPT"
     for attempt in range(1, MAX_RETRY_IMAGE + 1):
         print(f"→ Tạo ảnh lần {attempt}")
-
-        if SERVICE == "gemini":
-            ensure_gemini_image_tool(page)
 
         before_send_imgs = get_all_image_srcs(page, include_pending=True)
         merged_old_imgs = list(dict.fromkeys(old_imgs + before_send_imgs))
         before_response = get_assistant_response_signature(page)
 
-        send_prompt(page, prompt_text, max_send_attempts=1)
+        send_prompt(page, PROMPT_TAO_ANH, max_send_attempts=1)
 
         # Chỉ chờ phản hồi bắt đầu, không dùng hàm timeout ngắn 180 giây để kết luận fail.
         # Sau đó chuyển sang hàm chờ ảnh riêng bên dưới.
         started = False
         start = time.time()
-        print(f"⏳ Chờ {service_name} bắt đầu tạo ảnh...")
+        print("⏳ Chờ ChatGPT bắt đầu tạo ảnh...")
         while time.time() - start < 120:
             wait_if_cloudflare(page)
             quota_evidence = get_generation_quota_evidence(page, before_response)
             if quota_evidence:
-                raise_image_quota_error(page, quota_evidence, before_response, service_name=service_name)
+                raise_image_quota_error(page, quota_evidence, before_response)
             if is_generating(page):
                 started = True
                 break
@@ -2331,7 +2077,7 @@ def try_create_image(page, old_imgs):
 
         if not started:
             current_text = get_prompt_text(page)
-            if prompt_text in current_text:
+            if PROMPT_TAO_ANH in current_text:
                 raise Exception("Prompt tạo ảnh vẫn còn trong ô nhập sau khi gửi; dừng để tránh gửi trùng.")
 
         img_url = wait_image_generation_finished_or_image_ready(
@@ -2345,7 +2091,7 @@ def try_create_image(page, old_imgs):
             return img_url
 
         # Trước khi retry lần sau, chờ chắc chắn ChatGPT đã thật sự dừng.
-        print(f"⚠ Chưa lấy được ảnh → chuẩn bị retry, chờ {service_name} idle chắc chắn")
+        print("⚠ Chưa lấy được ảnh → chuẩn bị retry, chờ ChatGPT idle chắc chắn")
         idle_start = time.time()
         while time.time() - idle_start < 120:
             wait_if_cloudflare(page)
@@ -2640,8 +2386,6 @@ def process_one(page, image_indices, img):
     print(f"\n--- {index}: {img.name} → {save_name} ---")
 
     reset_chat(page)
-    if SERVICE == "gemini":
-        ensure_gemini_normal_chat(page)
     upload_image(page, img)
     wait_upload_attached(page, timeout=90)
 

@@ -19,8 +19,6 @@ SETTINGS_KEYS = {
     "download_folder",
     "profile_dir",
     "gemini_profile_dir",
-    "gemini_accounts",
-    "active_gemini_account_id",
     "chatgpt_accounts",
     "active_chatgpt_account_id",
     "auto_account_fallback_enabled",
@@ -72,12 +70,6 @@ def make_default_settings(data_dir: Path) -> dict[str, Any]:
             "profile_dir": str(data_dir / "chatgpt_auto_profile"),
         }],
         "active_chatgpt_account_id": "default",
-        "gemini_accounts": [{
-            "id": "default",
-            "name": "Gemini 1",
-            "profile_dir": str(data_dir / "gemini_auto_profile"),
-        }],
-        "active_gemini_account_id": "default",
         "auto_account_fallback_enabled": True,
         "batch_size": "10",
         "start_from": "",
@@ -93,7 +85,6 @@ def copy_default_settings(defaults: Mapping[str, Any]) -> dict[str, Any]:
     return {
         **defaults,
         "chatgpt_accounts": [dict(account) for account in defaults["chatgpt_accounts"]],
-        "gemini_accounts": [dict(account) for account in defaults.get("gemini_accounts", [])],
     }
 
 
@@ -111,10 +102,6 @@ def load_settings(path: Path, defaults: Mapping[str, Any]) -> dict[str, Any]:
                 settings["active_chatgpt_account_id"] = ""
             if "gemini_profile_dir" not in saved:
                 settings["gemini_profile_dir"] = ""
-            if "gemini_accounts" not in saved:
-                settings["gemini_accounts"] = []
-            if "active_gemini_account_id" not in saved:
-                settings["active_gemini_account_id"] = ""
             return settings
         except (OSError, ValueError, TypeError, json.JSONDecodeError):
             pass
@@ -181,56 +168,7 @@ def normalize_chatgpt_accounts(settings: dict[str, Any], data_dir: Path) -> list
     settings["chatgpt_accounts"] = accounts
     settings["active_chatgpt_account_id"] = active_id
     settings["gemini_profile_dir"] = gemini_profile
-    normalize_gemini_accounts(settings, data_dir)
     return accounts
-
-
-def normalize_gemini_accounts(settings: dict[str, Any], data_dir: Path) -> list[dict[str, str]]:
-    """Migrate the existing Gemini profile without moving or clearing its login data."""
-    accounts = []
-    seen_ids, seen_names = set(), set()
-    raw_accounts = settings.get("gemini_accounts", [])
-    if isinstance(raw_accounts, list):
-        for raw in raw_accounts:
-            if not isinstance(raw, dict):
-                continue
-            account_id = str(raw.get("id", "")).strip()
-            name = str(raw.get("name", "")).strip()
-            profile = str(raw.get("profile_dir", "")).strip()
-            if not account_id or not name or not profile or account_id in seen_ids or name.casefold() in seen_names:
-                continue
-            accounts.append({"id": account_id, "name": name, "profile_dir": profile})
-            seen_ids.add(account_id)
-            seen_names.add(name.casefold())
-    legacy_profile = str(settings.get("gemini_profile_dir", "")).strip()
-    if not legacy_profile and settings.get("service") == "gemini":
-        legacy_profile = str(settings.get("profile_dir", "")).strip()
-    if not accounts:
-        accounts = [{"id": "default", "name": "Gemini 1",
-                     "profile_dir": legacy_profile or str(data_dir / "gemini_auto_profile")}]
-    active_id = str(settings.get("active_gemini_account_id", "")).strip()
-    if active_id not in {account["id"] for account in accounts}:
-        active_id = next((account["id"] for account in accounts if account["profile_dir"] == legacy_profile),
-                         accounts[0]["id"])
-    # Older callers can still configure the single default Gemini profile.
-    active = next(account for account in accounts if account["id"] == active_id)
-    if len(accounts) == 1 and active["id"] == "default" and legacy_profile:
-        active["profile_dir"] = legacy_profile
-    settings["gemini_accounts"] = accounts
-    settings["active_gemini_account_id"] = active_id
-    settings["gemini_profile_dir"] = next(account["profile_dir"] for account in accounts if account["id"] == active_id)
-    return accounts
-
-
-def get_service_accounts(settings: dict[str, Any], data_dir: Path) -> list[dict[str, str]]:
-    normalize_chatgpt_accounts(settings, data_dir)
-    return settings[f"{settings.get('service', 'chatgpt')}_accounts"]
-
-
-def get_active_account(settings: dict[str, Any], data_dir: Path) -> dict[str, str]:
-    accounts = get_service_accounts(settings, data_dir)
-    active_id = settings[f"active_{settings.get('service', 'chatgpt')}_account_id"]
-    return next(account for account in accounts if account["id"] == active_id)
 
 
 def get_active_chatgpt_account(settings: dict[str, Any], data_dir: Path) -> dict[str, str]:
@@ -261,13 +199,16 @@ def apply_form_settings(current: dict[str, Any], payload: Any, data_dir: Path) -
 
     updated = {**deepcopy(current), **payload}
     normalize_chatgpt_accounts(updated, data_dir)
-    profile = str(payload.get("profile_dir", "")).strip()
-    account = get_active_account(updated, data_dir)
-    if profile:
-        account["profile_dir"] = profile
-    updated["profile_dir"] = account["profile_dir"]
-    if updated["service"] == "gemini":
-        updated["gemini_profile_dir"] = account["profile_dir"]
+    profile = str(updated.get("profile_dir", "")).strip()
+    if updated["service"] == "chatgpt":
+        account = get_active_chatgpt_account(updated, data_dir)
+        if profile:
+            account["profile_dir"] = profile
+        updated["profile_dir"] = account["profile_dir"]
+    else:
+        if profile:
+            updated["gemini_profile_dir"] = profile
+        updated["profile_dir"] = updated["gemini_profile_dir"]
     return updated
 
 
@@ -292,7 +233,11 @@ def build_process_launch(
     data_dir = Path(data_dir or get_data_dir(app_dir))
     normalize_chatgpt_accounts(settings, data_dir)
     service = settings.get("service", "chatgpt")
-    profile = get_active_account(settings, data_dir)["profile_dir"]
+    profile = (
+        get_active_chatgpt_account(settings, data_dir)["profile_dir"]
+        if service == "chatgpt"
+        else settings["gemini_profile_dir"]
+    )
     settings["profile_dir"] = profile
 
     env = dict(environ or os.environ)
