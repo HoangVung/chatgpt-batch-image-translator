@@ -7,7 +7,7 @@ import tempfile
 import types
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
 from PIL import Image
 
 
@@ -17,6 +17,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 playwright_module = types.ModuleType("playwright")
 playwright_sync_module = types.ModuleType("playwright.sync_api")
 playwright_sync_module.sync_playwright = lambda: None
+playwright_sync_module.Error = Exception
 try:
     import playwright.sync_api
 except ImportError:
@@ -182,6 +183,42 @@ class ProgressTests(unittest.TestCase):
             self.assertEqual(worker.main(), 0)
 
         self.assertEqual(events, ["result", "close"])
+
+    def test_closed_browser_stops_without_failing_remaining_images(self):
+        images = [Path("01_101.jpg"), Path("02_102.jpg")]
+        context = MagicMock()
+        page = object()
+        context.pages = [page]
+        scope = MagicMock()
+        with patch.object(worker, "RUN_MODE", "main"), \
+             patch.object(worker, "START_FROM", ""), \
+             patch.object(worker, "ensure_dirs"), patch.object(worker, "init_progress"), \
+             patch.object(worker, "get_images", return_value=images), \
+             patch.object(worker, "get_next_batch", return_value=images), \
+             patch.object(worker, "get_job_state", return_value={"pending": 2}), \
+             patch.object(worker, "get_chatgpt_accounts", return_value=[]), \
+             patch.object(worker, "sync_playwright", return_value=scope), \
+             patch.object(worker, "launch_persistent_context", return_value=context), \
+             patch.object(worker, "minimize_own_browser"), \
+             patch.object(worker, "login_if_needed", return_value=page), \
+             patch.object(worker, "process_one", side_effect=worker.PlaywrightError(
+                 "Page.goto: Target page, context or browser has been closed")) as process, \
+             patch.object(worker, "write_progress") as progress, \
+             patch.object(worker, "write_job_checkpoint") as checkpoint, \
+             patch.object(worker, "finish_batch_result") as finish, \
+             patch.object(worker, "close_browser_context") as close, patch.object(worker, "print"):
+            with self.assertRaises(worker.PlaywrightError):
+                worker.main()
+        process.assert_called_once()
+        progress.assert_not_called()
+        finish.assert_not_called()
+        close.assert_called_once_with(context)
+        stopped = [call.kwargs for call in checkpoint.call_args_list
+                   if call.kwargs.get('stage') == 'browser_closed']
+        self.assertEqual(len(stopped), 1)
+        self.assertEqual(stopped[0]['position'], 0)
+        self.assertEqual(stopped[0]['current_image'], images[0].name)
+        self.assertEqual(stopped[0]['state'], 'stopped')
 
     def test_login_mode_opens_only_the_account_session(self):
         with patch.object(worker, "RUN_MODE", "login"), patch.object(worker, "login_only", return_value=0) as login_only, patch.object(worker, "get_images", side_effect=AssertionError("batch images should not be read")):

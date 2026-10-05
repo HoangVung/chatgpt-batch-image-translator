@@ -358,6 +358,20 @@ class WebApiTests(unittest.TestCase):
                 self.assertEqual(log.count(notice), 1)
                 self.assertNotIn("__ACCOUNT_EVENT__=", log)
 
+    def test_quota_event_pushes_and_persists_vietnam_estimate(self):
+        event = {
+            "event": "account_quota_exhausted", "account_id": "personal",
+            "account_name": "Vung-Personal", "detected_at": "2026-10-04T11:40:00Z",
+            "evidence": "You've hit the Plus plan limit. The limit resets in 10 hours.",
+        }
+        self.api._render_account_event(event)
+        updates = [item for item in self.api.sent_events if item["type"] == "quota_limits_changed"]
+        self.assertEqual(updates[-1]["payload"]["accounts"][0]["reset_vn"], "05/10 04:40")
+        self.assertIn(event["evidence"], "".join(self.api.controller.log_history))
+        self.api.clear_log()
+        self.assertEqual(self.api._snapshot()["quota_limits"][0]["account_name"], "Vung-Personal")
+        self.assertTrue((self.data_dir / "quota_limits.json").exists())
+
     def test_quota_event_without_evidence_still_logs_account_warning(self):
         self.api._render_account_event({
             "event": "account_quota_exhausted", "account_name": "Account One",

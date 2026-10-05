@@ -1314,7 +1314,10 @@ select {
   padding-right: 30px;
 }
 
-:root[data-theme="dark"] select,
+:root[data-theme="dark"] select {
+  background-image: url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0naHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmcnIHdpZHRoPSc4JyBoZWlnaHQ9JzEyJyB2aWV3Qm94PScwIDAgOCAxMicgZmlsbD0nbm9uZSc+PHBhdGggZD0nTTEuNSA0LjVMNCAyTDYuNSA0LjUnIHN0cm9rZT0nIzljYWJjMCcgc3Ryb2tlLXdpZHRoPScxLjUnIHN0cm9rZS1saW5lY2FwPSdyb3VuZCcgc3Ryb2tlLWxpbmVqb2luPSdyb3VuZCcvPjxwYXRoIGQ9J00xLjUgNy41TDQgMTBMNi41IDcuNScgc3Ryb2tlPScjOWNhYmMwJyBzdHJva2Utd2lkdGg9JzEuNScgc3Ryb2tlLWxpbmVjYXA9J3JvdW5kJyBzdHJva2UtbGluZWpvaW49J3JvdW5kJy8+PC9zdmc+");
+}
+
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) select {
     background-image: url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0naHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmcnIHdpZHRoPSc4JyBoZWlnaHQ9JzEyJyB2aWV3Qm94PScwIDAgOCAxMicgZmlsbD0nbm9uZSc+PHBhdGggZD0nTTEuNSA0LjVMNCAyTDYuNSA0LjUnIHN0cm9rZT0nIzljYWJjMCcgc3Ryb2tlLXdpZHRoPScxLjUnIHN0cm9rZS1saW5lY2FwPSdyb3VuZCcgc3Ryb2tlLWxpbmVqb2luPSdyb3VuZCcvPjxwYXRoIGQ9J00xLjUgNy41TDQgMTBMNi41IDcuNScgc3Ryb2tlPScjOWNhYmMwJyBzdHJva2Utd2lkdGg9JzEuNScgc3Ryb2tlLWxpbmVjYXA9J3JvdW5kJyBzdHJva2UtbGluZWpvaW49J3JvdW5kJy8+PC9zdmc+");
@@ -1340,20 +1343,18 @@ select {
 body.no-custom-chrome .titlebar { display: none; }
 body.no-custom-chrome { padding-top: 0; }
 
-/* Keep native Windows panels on ordinary painted surfaces. Stacked backdrop
-   filters and large blurred layers can flicker in the WebView2 compositor even
-   while the DOM is idle. The browser/macOS presentation remains unchanged. */
-body.windows-webview { --native-panel: #fafcff; }
-:root[data-theme="dark"] body.windows-webview { --native-panel: #1f2837; }
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) body.windows-webview { --native-panel: #1f2837; }
-}
+/* Restore Liquid Glass on Windows using the shared light/dark surface tokens.
+   Limit blur to the panels: keep the ambient layers hidden and the fixed
+   titlebar painted so scrolling does not stack its blur over the panel blur.
+   The body gradients provide a static backdrop; controls and log text do not
+   add nested filters. Reduced-transparency and unsupported-filter fallbacks
+   above still apply. */
+body.windows-webview { --blur-panel: 16px; }
 body.windows-webview .ambient { display: none; }
-body.windows-webview .glass,
 body.windows-webview .titlebar {
   -webkit-backdrop-filter: none;
   backdrop-filter: none;
-  background: var(--native-panel);
+  background: linear-gradient(180deg, var(--bg-panel-strong), var(--bg-panel));
 }
 
 /* Compact batch controls follow the workspace cards in normal document flow. */
@@ -1562,3 +1563,19 @@ body.windows-webview .titlebar {
   .workflow-tabs .workflow-tab { min-height: 52px; padding: 7px 12px; gap: 2px; }
   .batch-dock { padding-top: 8px; padding-bottom: 8px; }
 }
+
+/* Per-account recovery estimates live in each book's sidebar card. */
+.workflow-quota { display: block; width: 100%; min-width: 0; }
+.workflow-quota:empty { display: none; }
+.workflow-quota-row {
+  display: block;
+  margin-top: 3px;
+  color: var(--warning);
+  font-size: 10px;
+  line-height: 1.4;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.workflow-quota-row.estimate-due { color: var(--text-secondary); }

@@ -76,6 +76,33 @@ class WorkflowFrontendTests(unittest.TestCase):
         self.page.close()
         self.assertEqual(self.errors, [])
 
+    def test_quota_rows_update_in_background_book_without_switching(self):
+        page = self.page
+        accounts = [
+            {"account_id": "personal", "account_name": "Vung-Personal",
+             "detected_vn": "04/10/2026 18:40", "reset_vn": "05/10 04:40",
+             "reset_vn_full": "05/10/2026 04:40", "reset_at": 1791140400},
+            {"account_id": "business", "account_name": "Business", "reset_at": None,
+             "reset_vn": None},
+        ]
+        page.evaluate("(accounts) => emitWorkflow('book-2', 'quota_limits_changed', {accounts})", accounts)
+        self.assertEqual(page.locator('#tab-book-2 .workflow-quota-row').count(), 2)
+        self.assertIn('⏳ Vung-Personal → 05/10 04:40 VN',
+                      page.locator('#tab-book-2 .workflow-quota').inner_text())
+        self.assertIn('chưa rõ giờ', page.locator('#tab-book-2 .workflow-quota').inner_text())
+        self.assertEqual(page.locator('#tab-book-1').get_attribute('aria-selected'), 'true')
+        page.evaluate("() => emitWorkflow('book-2', 'log_cleared')")
+        self.assertEqual(page.locator('#tab-book-2 .workflow-quota-row').count(), 2)
+        page.locator('#tab-book-2').click()
+        self.assertEqual(page.locator('#tab-book-2 .workflow-quota-row').count(), 2)
+        for width, height in [(1180, 820), (900, 700)]:
+            page.set_viewport_size({"width": width, "height": height})
+            row = page.locator('#tab-book-2 .workflow-quota-row').first.bounding_box()
+            card = page.locator('#tab-book-2').bounding_box()
+            self.assertGreaterEqual(row['x'], card['x'])
+            self.assertLessEqual(row['x'] + row['width'], card['x'] + card['width'])
+            self.assertLessEqual(row['height'], 16)
+
     def test_streaming_logs_preserve_selection_scroll_and_other_ui(self):
         page = self.page
         page.evaluate(r"""() => {

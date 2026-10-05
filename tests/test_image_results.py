@@ -152,6 +152,105 @@ class ImageResultTests(unittest.TestCase):
         self.assertEqual(snapshot["ignored"].get("user"), 1, snapshot)
         self.assertEqual(snapshot["ignored"].get("outside_response"), 1, snapshot)
 
+    def test_shared_turn_keeps_marked_result_and_excludes_user_upload(self):
+        upload, generated = image_url(size=(120, 120)), image_url()
+        self.show(f"""<main><article data-testid="conversation-turn-8">
+            <div data-message-author-role="user"><img src="{upload}">Tạo ảnh với bản dịch</div>
+            <div data-testid="generated-image-gallery"><img src="{generated}"></div>
+        </article></main>""")
+        self.assertEqual(self.worker.get_all_image_srcs(self.page), [generated])
+
+    def test_imagegen_card_is_detected_at_old_and_native_window_sizes(self):
+        generated = image_url()
+        for width, height in ((1400, 900), (1100, 700)):
+            with self.subTest(width=width, height=height):
+                self.page.set_viewport_size({'width': width, 'height': height})
+                self.show(f"""<main><article data-message-id="result-8">
+                    <div class="group/image-gen"><img src="{generated}"><button>Edit</button></div>
+                </article></main>""")
+                snapshot = self.worker.get_image_snapshot(self.page)
+                self.assertEqual(self.worker.get_all_image_srcs(self.page), [generated], snapshot)
+                self.assertEqual(snapshot['diagnostics']['viewport_height'], height)
+        self.worker.download_image(self.page, generated, str(self.destination))
+        self.assert_saved_png()
+
+    def test_named_generated_image_in_conversation_is_not_an_upload(self):
+        generated, upload = image_url(), image_url(size=(120, 120))
+        self.show(f"""<main>
+            <div data-message-author-role="user"><img alt="Generated image" src="{upload}"></div>
+            <div><img alt="Generated image" src="{generated}"><button>Edit</button></div>
+        </main>""")
+        self.assertEqual(self.worker.get_all_image_srcs(self.page), [generated])
+
+    def test_legacy_imagegen_marker_does_not_accept_library_or_composer(self):
+        generated = image_url()
+        card = f'<article data-message-id="result"><div class="group/image-gen"><img alt="Generated image" src="{generated}"></div></article>'
+        for wrapper in ('<aside>{}</aside>', '<div data-message-author-role="user">{}</div>',
+                        '<form><div id="prompt-textarea" contenteditable="true"></div>{}</form>'):
+            with self.subTest(wrapper=wrapper):
+                self.show(wrapper.format(card))
+                self.assertEqual(self.worker.get_all_image_srcs(self.page, include_pending=True), [])
+
+    def test_hidden_edit_control_does_not_confirm_completion(self):
+        self.show(f"""<main><article data-message-id="pending-result">
+            <div class="group/image-gen"><img src="{image_url()}"><button style="visibility:hidden">Edit</button></div>
+        </article></main>""")
+        snapshot = self.worker.get_image_snapshot(self.page)
+        self.assertEqual(len(snapshot['images']), 1)
+        self.assertFalse(snapshot['images'][0]['finalized'])
+
+    def test_completed_editable_card_is_used_while_later_response_is_generating(self):
+        generated = image_url()
+        self.show(f"""<main><article data-message-id="generated-result">
+            <div class="group/image-gen"><img src="{generated}"><button>Edit</button></div>
+        </article></main>""")
+        now = [0]
+        class Clock:
+            def time(self):
+                return now[0]
+        def sleep(seconds):
+            now[0] += seconds
+        with patch.object(self.worker, 'time', Clock()), \
+             patch.object(self.worker, 'sleep', side_effect=sleep), \
+             patch.object(self.worker, 'wait_if_cloudflare'), \
+             patch.object(self.worker, 'is_generating', return_value=True), \
+             patch.object(self.worker, 'get_generation_quota_evidence', return_value=None), \
+             patch.object(self.worker, 'has_clear_generation_error', return_value=False), \
+             patch.object(self.worker, 'print'):
+            self.assertEqual(self.worker.wait_image_generation_finished_or_image_ready(
+                self.page, [], timeout=30), generated)
+        self.assertEqual(now[0], 10)
+
+    def test_late_image_is_used_without_sending_a_second_generation_prompt(self):
+        generated, old = image_url(), image_url(size=(100, 100))
+        now = [0]
+        arrived = [False]
+        class Clock:
+            def time(self):
+                return now[0]
+        def sleep(seconds):
+            now[0] += seconds
+        def wait(*args, **kwargs):
+            if not arrived[0]:
+                arrived[0] = True
+                return None
+            return generated
+        with patch.object(self.worker, 'time', Clock()), \
+             patch.object(self.worker, 'sleep', side_effect=sleep), \
+             patch.object(self.worker, 'wait_if_cloudflare'), \
+             patch.object(self.worker, 'get_all_image_srcs', return_value=[old]), \
+             patch.object(self.worker, 'get_assistant_response_signature', return_value={'count': 0}), \
+             patch.object(self.worker, 'get_generation_quota_evidence', return_value=None), \
+             patch.object(self.worker, 'get_prompt_text', return_value=''), \
+             patch.object(self.worker, 'is_generating', return_value=False), \
+             patch.object(self.worker, 'get_latest_new_image', side_effect=lambda *_: generated if arrived[0] else None), \
+             patch.object(self.worker, 'wait_image_generation_finished_or_image_ready', side_effect=wait) as waiter, \
+             patch.object(self.worker, 'send_prompt') as send, patch.object(self.worker, 'print'):
+            self.assertEqual(self.worker.try_create_image(self.page, [old]), generated)
+        send.assert_called_once()
+        self.assertEqual(waiter.call_count, 2)
+        self.assertEqual(waiter.call_args.args[1], [old])
+
     def test_generated_gallery_requires_conversation_and_excludes_user_and_composer(self):
         generated = image_url()
         gallery = f"""<div data-testid="generated-image-gallery">

@@ -33,6 +33,7 @@ from desktop.runtime import (
 from desktop.web_scheduler import WebScheduler
 from desktop.web_text import WEB_TEXT
 from desktop.folder_progress import FolderProgress
+from desktop.quota_limits import QuotaLimits
 
 
 VALID_MODES = {"main", "retry", "force"}
@@ -110,6 +111,7 @@ class WebApi:
         self._folder_progress_value = {"done": None, "total": None}
         self._folder_progress_thread = None
         self._folder_progress_dirty = False
+        self._quota_limits = QuotaLimits(self.data_dir / "quota_limits.json")
         self._configure_controller()
 
     def _attach_window(self, window: Any) -> None:
@@ -247,6 +249,13 @@ class WebApi:
                 evidence = str(event.get("evidence") or "").strip()
                 if evidence:
                     message += "\n  ChatGPT: " + evidence
+                try:
+                    self._quota_limits.record(event)
+                except OSError as exc:
+                    self._append_log("⚠ Không lưu được giờ dự kiến phục hồi quota: " + str(exc) + "\n")
+                self._push_event("quota_limits_changed", {
+                    "accounts": self._quota_limits.snapshot(self.settings.get("chatgpt_accounts", [])),
+                })
             self._append_log("\n" + message + "\n")
         if event_name == "job_waiting":
             self._set_status("account_waiting_status")
@@ -330,6 +339,7 @@ class WebApi:
         state["sequence"] = self.sequence
         state["run_id"] = self.run_id
         state["folder_progress"] = folder_progress
+        state["quota_limits"] = self._quota_limits.snapshot(self.settings.get("chatgpt_accounts", []))
         return json_safe(state)
 
     def _public_settings(self) -> dict[str, Any]:

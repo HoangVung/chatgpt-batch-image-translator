@@ -13,7 +13,7 @@ from io import BytesIO
 from pathlib import Path
 from datetime import datetime
 from PIL import Image
-from playwright.sync_api import sync_playwright
+from playwright.sync_api import sync_playwright, Error as PlaywrightError
 from progress_utils import FAILED_STATUSES, read_latest_progress
 from browser_profiles import prepare_profile_dir
 from worker_control import (
@@ -281,7 +281,8 @@ PROGRESS_FILE = os.path.join(DOWNLOAD_FOLDER, "progress.csv")
 class QuotaExhaustedError(RuntimeError):
     """The active ChatGPT account cannot generate another image right now."""
 
-    def __init__(self, evidence):
+    def __init__(self, evidence, detected_at=None):
+        self.detected_at = time.time() if detected_at is None else detected_at
         self.evidence = str(evidence or "").strip()
         super().__init__("Tài khoản ChatGPT đã hết lượt tạo ảnh")
 
@@ -631,14 +632,18 @@ def minimize_own_browser(context):
 
 def is_cloudflare(page):
     try:
-        text = page.locator("body").inner_text(timeout=3000).lower()
         url = page.url.lower()
-
+        if "/cdn-cgi/challenge" in url or url.startswith("https://challenges.cloudflare.com/"):
+            return True
+        # Conversation text can mention verification; it is not a challenge page.
+        prompt = get_prompt_locator(page)
+        if prompt.count() > 0 and prompt.first.is_visible():
+            return False
+        text = page.locator("body").inner_text(timeout=3000).lower()
         return (
             "verify you are human" in text
             or "just a moment" in text
-            or "cloudflare" in text
-            or "challenge" in url
+            or "checking your browser" in text
         )
     except Exception:
         return False
@@ -710,9 +715,10 @@ def login_if_needed(page, service=SERVICE):
 
     # A challenge and sign-in belong to the same manual step. Nested waits here
     # can consume the first Continue for Cloudflare and then ask for it again.
-    if wait_signed_in_session(page, service=service, timeout=90):
+    ready_page = wait_signed_in_session(page, service=service, timeout=90, return_page=True)
+    if ready_page:
         print(f"✅ Đã vào được {service.upper()}.")
-        return
+        return ready_page
 
     print("\nMANUAL_ACTION_REQUIRED")
     print(f"⚠️ Cần đăng nhập hoặc xác minh {service.upper()}.")
@@ -720,9 +726,14 @@ def login_if_needed(page, service=SERVICE):
     print("👉 Khi thấy ô chat và không còn nút đăng nhập, quay lại app bấm 'Tiếp tục sau can thiệp'.")
     wait_for_continue("Chờ app gửi ENTER sau khi login xong... ")
 
-    if not wait_signed_in_session(page, service=service, timeout=90):
+    print("→ Đã nhận Tiếp tục; đang kiểm tra các tab và chờ phiên đăng nhập sẵn sàng (tối đa 90 giây).")
+    ready_page = wait_signed_in_session(
+        page, service=service, timeout=90, wait_for_transition=True, return_page=True,
+    )
+    if not ready_page:
         raise Exception(f"{service.upper()} chưa đăng nhập hoặc chưa sẵn sàng sau khi can thiệp.")
     print(f"✅ Đã vào được {service.upper()}.")
+    return ready_page
 
 
 def has_signin_prompt(page, service="chatgpt"):
@@ -743,42 +754,75 @@ def has_signin_prompt(page, service="chatgpt"):
         else [
             'a:has-text("Log in")',
             'button:has-text("Log in")',
+            'a:has-text("Sign in")',
+            'button:has-text("Sign in")',
             'a:has-text("Đăng nhập")',
             'button:has-text("Đăng nhập")',
         ]
     )
+    signin_labels = {"log in", "sign in", "đăng nhập"}
+    if service == "gemini":
+        signin_labels.update({"get started", "bắt đầu"})
     for selector in signin_selectors:
         try:
             matches = page.locator(selector)
             for index in range(matches.count()):
-                if matches.nth(index).is_visible():
+                control = matches.nth(index)
+                if not control.is_visible():
+                    continue
+                # Personalized suggestion cards can contain "đăng nhập" too.
+                # Only an actual sign-in label blocks an authenticated composer.
+                label = " ".join(control.inner_text(timeout=1500).split()).casefold()
+                if label in signin_labels:
                     return True
         except Exception:
             continue
     return False
 
 
-def wait_signed_in_session(page, service="chatgpt", timeout=30):
-    """Poll current auth UI without asking for a second manual intervention."""
+def wait_signed_in_session(page, service="chatgpt", timeout=30,
+                           wait_for_transition=False, return_page=False):
+    """Check chat tabs in this context; let manual login finish transitioning."""
     start = time.monotonic()
+    reasons = []
     while time.monotonic() - start < timeout:
         check_stop_requested()
-        if is_cloudflare(page):
-            return False
-
-        has_signin = has_signin_prompt(page, service=service)
-        # The guest page can also have a composer. Allow cookie hydration to
-        # settle, then check the live sign-in controls before accepting it.
-        if time.monotonic() - start >= 4:
-            if has_signin:
-                return False
+        candidates = [page]
+        if return_page or wait_for_transition:
             try:
-                prompt = get_prompt_locator(page)
-                if prompt.count() > 0 and prompt.first.is_visible():
-                    return True
+                candidates.extend(candidate for candidate in page.context.pages if candidate is not page)
             except Exception:
                 pass
+        blocked = False
+        reasons = []
+        for candidate in candidates:
+            try:
+                pattern = (r"https://gemini\.google\.com(?:/|$)" if service == "gemini"
+                           else r"https://(?:chatgpt\.com|chat\.openai\.com)(?:/|$)")
+                if not re.match(pattern, candidate.url, re.IGNORECASE):
+                    reasons.append("tab chưa quay về trang chat")
+                    continue
+                if is_cloudflare(candidate):
+                    blocked = True
+                    reasons.append("tab đang xác minh Cloudflare")
+                    continue
+                if has_signin_prompt(candidate, service=service):
+                    blocked = True
+                    reasons.append("tab vẫn hiện nút đăng nhập")
+                    continue
+                prompt = get_prompt_locator(candidate)
+                if time.monotonic() - start >= 4 and prompt.count() > 0 and prompt.first.is_visible():
+                    return candidate if return_page else True
+                reasons.append("tab chưa có ô nhập chat hiển thị")
+            except Exception:
+                reasons.append("tab đang chuyển trang hoặc đã đóng")
+        # Saved/fallback profiles stay bounded; a manual Continue grants the
+        # full timeout even while the original guest or challenge tab remains.
+        if blocked and time.monotonic() - start >= 4 and not wait_for_transition:
+            return False
         sleep(1)
+    if wait_for_transition:
+        print("⚠ Không xác nhận được phiên đăng nhập: " + "; ".join(dict.fromkeys(reasons)))
     return False
 
 
@@ -793,7 +837,9 @@ def launch_persistent_context(playwright, profile_dir):
         args=[
             "--disable-blink-features=AutomationControlled"
         ],
-        viewport={"width": 1400, "height": 900}
+        # Follow the real window: a fixed emulated viewport can place the
+        # account menu below the visible client area on scaled Windows displays.
+        no_viewport=True
     )
 
 
@@ -1686,6 +1732,7 @@ def get_generation_quota_evidence(page, before_signature=None):
 
 def raise_image_quota_error(page, evidence, before_signature):
     """Allow a short bounded wait for the reset sentence to finish streaming."""
+    detected_at = time.time()
     unchanged = 0
     for _ in range(10):
         sleep(1)
@@ -1698,7 +1745,7 @@ def raise_image_quota_error(page, evidence, before_signature):
         else:
             unchanged = 0
     print("⚠ ChatGPT báo đã hết lượt tạo ảnh")
-    raise QuotaExhaustedError(evidence)
+    raise QuotaExhaustedError(evidence, detected_at=detected_at)
 
 
 def log_response_wait_diagnostics(before_signature, current_signature):
@@ -1835,7 +1882,7 @@ def wait_response_after_send(page, timeout_start=90, timeout_done=900, resend_te
 def get_image_snapshot(page):
     """Inspect image results, including tool cards outside the assistant text node."""
     try:
-        return page.evaluate("""
+        return page.evaluate(r"""
             ({userSelector, assistantSelector}) => {
                 const prompt = document.querySelector('#prompt-textarea') || 
                                document.querySelector('.ql-editor[contenteditable="true"]') ||
@@ -1853,16 +1900,37 @@ def get_image_snapshot(page):
                     // ChatGPT can render the image tool as a sibling of the assistant
                     // message. Scope the fallback to its conversation turn, never the
                     // whole page (which also contains uploads, avatars and history).
+                    if (img.closest('aside, nav')) { skip('outside_response'); continue; }
                     const turn = img.closest('[data-testid^="conversation-turn-"]');
-                    if (turn && turn.querySelector(userSelector)) { skip('user'); continue; }
+                    const assistant = img.closest(assistantSelector);
                     // The newer ChatGPT UI puts generated galleries outside every
                     // assistant search unit. Its search turn also contains the user
                     // prompt, so only accept marked image tools within that turn.
-                    const generatedTool = img.closest(
-                        '[data-testid="generated-image-preview"], [data-testid="generated-image-gallery"]'
+                    const generatedAlt = /^(?:generated image|ảnh đã tạo|ảnh được tạo)(?:\s+\d+)?$/i.test(
+                        (img.getAttribute('alt') || '').trim()
                     );
-                    const generatedTurn = generatedTool && img.closest('[data-content-search-turn-key]');
-                    const message = img.closest(assistantSelector) || turn || generatedTurn;
+                    const generatedTool = img.closest(
+                        '[data-testid="generated-image-preview"], [data-testid="generated-image-gallery"], ' +
+                        '[data-testid="image-gen"], [data-testid="imagegen-tool"], ' +
+                        '[class~="group/image-gen"], [class~="group/generated-image-preview"]'
+                    ) || (generatedAlt ? img : null);
+                    // A shared turn may contain both the user prompt and its image
+                    // result. Reject uploads by their own role, not the whole turn.
+                    if (turn && turn.querySelector(userSelector) && !assistant && !generatedTool) {
+                        skip('user'); continue;
+                    }
+                    let generatedTurn = generatedTool && img.closest(
+                        '[data-content-search-turn-key], [data-chatgpt-search-turn-key], ' +
+                        '[data-chatgpt-search-message-ids], [data-message-id], ' +
+                        '[data-chatgpt-selection-message-id], article'
+                    );
+                    if (!generatedTurn && generatedAlt) {
+                        const main = img.closest('main');
+                        if (main && main.querySelector(userSelector + ',' + assistantSelector)) {
+                            generatedTurn = main;
+                        }
+                    }
+                    const message = assistant || turn || generatedTurn;
                     if (!message) { skip('outside_response'); continue; }
 
                     const src = img.currentSrc || img.getAttribute('src') || '';
@@ -1883,12 +1951,36 @@ def get_image_snapshot(page):
 
                     if (seen.has(src)) continue;
 
+                    let finalized = false;
+                    // Completed image cards expose Edit/Download even if a
+                    // later response keeps the page-wide Stop control active.
+                    for (let card = img.parentElement, depth = 0; card && depth < 6; card = card.parentElement, depth++) {
+                        if (card.querySelectorAll('img').length === 1) {
+                            finalized = Array.from(card.querySelectorAll('button, [role="button"], a[download]')).some(control => {
+                                const label = (control.getAttribute('aria-label') || control.getAttribute('title') ||
+                                    control.textContent || '').trim();
+                                const rect = control.getBoundingClientRect();
+                                const controlStyle = window.getComputedStyle(control);
+                                return rect.width > 0 && rect.height > 0 &&
+                                    controlStyle.visibility !== 'hidden' && controlStyle.display !== 'none' &&
+                                    /^(?:edit|edit image|chỉnh sửa|chỉnh sửa ảnh|sửa ảnh|download|download image|tải xuống|tải ảnh)$/i.test(label);
+                            });
+                        }
+                        if (finalized || card === message || card.matches('main, article')) break;
+                    }
                     seen.add(src);
-                    result.push({src, ready: visible && fullyLoaded});
+                    result.push({src, ready: visible && fullyLoaded, finalized: visible && fullyLoaded && finalized});
                     if (!visible || !fullyLoaded) skip('not_ready');
                 }
 
-                return {images: result, ignored};
+                return {images: result, ignored, diagnostics: {
+                    total_images: document.querySelectorAll('img').length,
+                    assistant_nodes: document.querySelectorAll(assistantSelector).length,
+                    conversation_turns: document.querySelectorAll(
+                        '[data-testid^="conversation-turn-"], [data-content-search-turn-key], [data-chatgpt-search-turn-key]'
+                    ).length,
+                    viewport_width: innerWidth, viewport_height: innerHeight,
+                }};
             }
         """, {"userSelector": USER_MESSAGE_SELECTOR, "assistantSelector": ASSISTANT_MESSAGE_SELECTOR})
     except Exception as exc:
@@ -1907,6 +1999,8 @@ def log_image_detection(page):
     ready = sum(image["ready"] for image in snapshot["images"])
     print(f"  ↳ Nhận diện ảnh: {ready} đã tải xong / {len(snapshot['images'])} trong phản hồi; "
           f"bỏ qua: {snapshot['ignored']}")
+    if snapshot.get("diagnostics"):
+        print("  ↳ Cấu trúc ảnh: " + json.dumps(snapshot["diagnostics"], ensure_ascii=False))
     if snapshot.get("error"):
         print(f"  ↳ Lỗi đọc ảnh trên trang: {snapshot['error']}")
 
@@ -2001,7 +2095,13 @@ def wait_image_generation_finished_or_image_ready(
             candidate_url = img_url
             candidate_idle_since = None
 
-        if candidate_url and not generating:
+        finalized = False
+        if candidate_url and generating:
+            finalized = any(
+                item["src"] == candidate_url and item.get("finalized")
+                for item in get_image_snapshot(page)["images"]
+            )
+        if candidate_url and (not generating or finalized):
             if candidate_idle_since is None:
                 candidate_idle_since = time.time()
                 print("✓ Có ảnh mới, chờ xác nhận ảnh hoàn tất...")
@@ -2047,11 +2147,23 @@ def wait_image_generation_finished_or_image_ready(
 
 
 def try_create_image(page, old_imgs):
+    merged_old_imgs = None
+    before_response = None
     for attempt in range(1, MAX_RETRY_IMAGE + 1):
+        # An output may arrive during the cooldown after the previous wait.
+        # Keep the first baseline and consume that output before sending again.
+        if attempt > 1 and get_latest_new_image(page, merged_old_imgs):
+            late_image = wait_image_generation_finished_or_image_ready(
+                page, merged_old_imgs, timeout=30, before_signature=before_response,
+            )
+            if late_image:
+                print("✓ Nhận được ảnh xuất hiện muộn; dùng kết quả đã tạo.")
+                return late_image
         print(f"→ Tạo ảnh lần {attempt}")
 
-        before_send_imgs = get_all_image_srcs(page, include_pending=True)
-        merged_old_imgs = list(dict.fromkeys(old_imgs + before_send_imgs))
+        if merged_old_imgs is None:
+            before_send_imgs = get_all_image_srcs(page, include_pending=True)
+            merged_old_imgs = list(dict.fromkeys(old_imgs + before_send_imgs))
         before_response = get_assistant_response_signature(page)
 
         send_prompt(page, PROMPT_TAO_ANH, max_send_attempts=1)
@@ -2506,7 +2618,7 @@ def main():
                 page = context.pages[0] if context.pages else context.new_page()
 
                 minimize_own_browser(context)
-                login_if_needed(page)
+                page = login_if_needed(page) or page
 
                 tried_account_ids = {current_account["id"]}
                 waiting_for_account = False
@@ -2540,6 +2652,7 @@ def main():
                                 account_name=current_account["name"],
                                 image=img.name,
                                 evidence=quota_error.evidence,
+                                detected_at=quota_error.detected_at,
                             )
                             account_states[current_account["id"]] = {
                                 "name": current_account["name"],
@@ -2634,6 +2747,15 @@ def main():
                             continue
 
                         except Exception as e:
+                            if isinstance(e, PlaywrightError) and "Target page, context or browser has been closed" in str(e):
+                                print("⚠ Tab hoặc phiên trình duyệt đã đóng; dừng batch, giữ nguyên các ảnh chưa xử lý.")
+                                write_job_checkpoint(
+                                    job_id=job_id, mode=RUN_MODE, images=images, batch=batch,
+                                    position=position, current_image=img.name,
+                                    active_account=current_account, stage="browser_closed",
+                                    state="stopped", account_states=account_states,
+                                )
+                                raise
                             index = image_indices.get(img, 0)
                             try:
                                 save_name = get_output_name(img)

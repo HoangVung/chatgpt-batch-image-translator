@@ -282,7 +282,8 @@ PROGRESS_FILE = os.path.join(DOWNLOAD_FOLDER, "progress.csv")
 class QuotaExhaustedError(RuntimeError):
     """The active ChatGPT account cannot generate another image right now."""
 
-    def __init__(self, evidence):
+    def __init__(self, evidence, detected_at=None):
+        self.detected_at = time.time() if detected_at is None else detected_at
         self.evidence = str(evidence or "").strip()
         super().__init__("Tài khoản ChatGPT đã hết lượt tạo ảnh")
 
@@ -1292,6 +1293,7 @@ def get_generation_quota_evidence(page, before_signature=None):
 
 def raise_image_quota_error(page, evidence, before_signature):
     """Allow a short bounded wait for the reset sentence to finish streaming."""
+    detected_at = time.time()
     unchanged = 0
     for _ in range(10):
         sleep(1)
@@ -1304,7 +1306,7 @@ def raise_image_quota_error(page, evidence, before_signature):
         else:
             unchanged = 0
     print("⚠ ChatGPT báo đã hết lượt tạo ảnh")
-    raise QuotaExhaustedError(evidence)
+    raise QuotaExhaustedError(evidence, detected_at=detected_at)
 
 
 def log_response_wait_diagnostics(before_signature, current_signature):
@@ -2146,6 +2148,7 @@ def main():
                                 account_name=current_account["name"],
                                 image=img.name,
                                 evidence=quota_error.evidence,
+                                detected_at=quota_error.detected_at,
                             )
                             account_states[current_account["id"]] = {
                                 "name": current_account["name"],

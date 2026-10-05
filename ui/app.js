@@ -44,6 +44,35 @@ function captureDraft(target = state) {
   renderTabs();
 }
 
+function renderQuotaRows(button, target) {
+  let container = button.querySelector(".workflow-quota");
+  if (!container) {
+    container = document.createElement("span");
+    container.className = "workflow-quota";
+    button.append(container);
+  }
+  const records = target.controller.quota_limits || [];
+  const signature = JSON.stringify([state.language, records.map(item => ({...item,
+    estimate_due: item.reset_at != null && item.reset_at * 1000 <= Date.now(),
+  }))]);
+  if (container.dataset.signature === signature) return;
+  container.dataset.signature = signature;
+  container.replaceChildren();
+  for (const item of records) {
+    const row = document.createElement("span");
+    row.className = "workflow-quota-row";
+    const due = item.reset_at != null && item.reset_at * 1000 <= Date.now();
+    row.classList.toggle("estimate-due", due);
+    setText(row, t(item.reset_vn ? "quota_recovery_line" : "quota_recovery_unknown",
+      {name: item.account_name, time: item.reset_vn}));
+    row.title = item.account_name + ". " + (item.reset_vn
+      ? t("quota_recovery_title", {detected: item.detected_vn, reset: item.reset_vn_full}) +
+        (due ? " " + t("quota_recovery_due") : "")
+      : t("quota_recovery_unknown_title"));
+    container.append(row);
+  }
+}
+
 function renderTabs() {
   const container = $("#workflow-tabs");
   setAttribute(container, "aria-label", t(multiSession ? "workflow_tabs" : "books"));
@@ -93,6 +122,7 @@ function renderTabs() {
     setAttribute(button, "aria-selected", target === state);
     setProperty(button, "tabIndex", target === state ? 0 : -1);
     setAttribute(button, "data-attention", attention);
+    renderQuotaRows(button, target);
   });
   if (state.id) setAttribute($("#workflow-panel"), "aria-labelledby", `tab-${state.id}`);
 }
@@ -355,6 +385,7 @@ window.batchTranslatorReceive = (message) => {
     target.controller.progress_total = payload.total;
   }
   if (message.type === "folder_progress_changed") target.controller.folder_progress = payload;
+  if (message.type === "quota_limits_changed") target.controller.quota_limits = payload.accounts || [];
   if (message.type === "process_started") target.controller.running = true;
   if (message.type === "process_completed") target.controller.running = false;
   if (message.type === "manual_action_required") target.controller.manual_action_required = true;

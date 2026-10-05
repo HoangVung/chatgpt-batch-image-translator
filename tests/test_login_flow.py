@@ -3,6 +3,7 @@ import importlib.util
 from pathlib import Path
 import sys
 import unittest
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 
@@ -51,6 +52,8 @@ class Locator:
         return self.count() > 0 and self.page.state() != "hidden"
 
     def inner_text(self, timeout=None):
+        if self.selector == self.page.signin_selector:
+            return "Đăng nhập" if "Đăng nhập" in self.selector else "Log in"
         return "Verify you are human" if self.page.state() == "challenge" else "Ask anything"
 
 
@@ -167,6 +170,52 @@ class LoginFlowTests(unittest.TestCase):
             with self.subTest(worker=worker.__name__):
                 self.assertTrue(worker.has_signin_prompt(Page("guest-hidden-first")))
 
+    def test_manual_continue_waits_for_slow_login_transition(self):
+        worker = WORKERS[0]
+        clock = Clock()
+        continued_at = []
+        page = Page(lambda: "guest" if not continued_at else
+                    "challenge" if clock.now - continued_at[0] < 6 else
+                    "hydrating" if clock.now - continued_at[0] < 12 else "ready")
+        page.clock = clock
+        ready, wait, _, _ = self.exercise(
+            worker, page, lambda: worker.login_if_needed(page),
+            continuation=lambda _prompt: continued_at.append(clock.now),
+        )
+        self.assertIs(ready, page)
+        self.assertGreaterEqual(clock.now - continued_at[0], 12)
+        wait.assert_called_once()
+
+    def test_manual_continue_uses_ready_chat_tab_in_same_context(self):
+        worker = WORKERS[0]
+        guest, ready = Page("guest"), Page("ready")
+        guest.context = SimpleNamespace(pages=[guest])
+        selected, wait, _, _ = self.exercise(
+            worker, guest, lambda: worker.login_if_needed(guest),
+            continuation=lambda _prompt: guest.context.pages.append(ready),
+        )
+        self.assertIs(selected, ready)
+        wait.assert_called_once()
+
+    def test_manual_continue_guest_timeout_reports_reason(self):
+        worker = WORKERS[0]
+        ready, _, output, clock = self.exercise(
+            worker, Page("guest"), lambda: worker.wait_signed_in_session(
+                Page("guest"), timeout=15, wait_for_transition=True),
+        )
+        self.assertFalse(ready)
+        self.assertEqual(clock.now, 15)
+        self.assertTrue(any("vẫn hiện nút đăng nhập" in str(call) for call in output.call_args_list))
+
+    def test_other_site_composer_cannot_be_accepted_as_chatgpt(self):
+        worker = WORKERS[0]
+        page = Page("ready")
+        page.url = "https://example.com/"
+        ready, _, _, _ = self.exercise(
+            worker, page, lambda: worker.wait_signed_in_session(page, timeout=7),
+        )
+        self.assertFalse(ready)
+
     def test_login_closes_context_on_completion_or_cooperative_stop(self):
         for worker in WORKERS:
             for stop in (False, True):
@@ -197,6 +246,16 @@ class LoginFlowTests(unittest.TestCase):
                     with self.assertRaises(worker.WorkerStopRequested):
                         worker.open_existing_chatgpt_account(object(), {"name": "Test", "profile_dir": "test-only-profile"})
                 context.close.assert_called_once()
+
+    def test_main_browser_layout_follows_real_window(self):
+        worker = WORKERS[0]
+        playwright = MagicMock()
+        with patch.object(worker, "prepare_profile_dir", return_value=Path("local-profile")), \
+             patch.object(worker, "check_stop_requested"):
+            worker.launch_persistent_context(playwright, "configured-profile")
+        options = playwright.chromium.launch_persistent_context.call_args.kwargs
+        self.assertTrue(options["no_viewport"])
+        self.assertNotIn("viewport", options)
 
     def test_launch_uses_prepared_profile_location(self):
         for worker in WORKERS:

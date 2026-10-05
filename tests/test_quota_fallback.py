@@ -13,6 +13,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 playwright_module = types.ModuleType("playwright")
 playwright_sync_module = types.ModuleType("playwright.sync_api")
 playwright_sync_module.sync_playwright = lambda: None
+playwright_sync_module.Error = Exception
 try:
     import playwright.sync_api
 except ImportError:
@@ -260,6 +261,7 @@ class FallbackCoordinatorTests(unittest.TestCase):
 
         images = [Path("01_101.jpg"), Path("02_102.jpg")]
         first_page = object()
+        authenticated_page = object()
         second_page = object()
         first_context = Context(first_page)
         second_context = Context(second_page)
@@ -291,7 +293,7 @@ class FallbackCoordinatorTests(unittest.TestCase):
              patch.object(worker, "launch_persistent_context", return_value=first_context), \
              patch.object(worker, "open_existing_chatgpt_account", return_value=(second_context, second_page)), \
              patch.object(worker, "minimize_own_browser"), \
-             patch.object(worker, "login_if_needed"), \
+             patch.object(worker, "login_if_needed", return_value=authenticated_page), \
              patch.object(worker, "process_one", side_effect=fake_process), \
              patch.object(worker, "write_job_checkpoint"), \
              patch.object(worker, "finish_batch_result", return_value=0), \
@@ -302,7 +304,7 @@ class FallbackCoordinatorTests(unittest.TestCase):
 
         self.assertEqual(
             [(page, name) for page, name in process_calls],
-            [(first_page, "01_101.jpg"), (second_page, "01_101.jpg"), (second_page, "02_102.jpg")],
+            [(authenticated_page, "01_101.jpg"), (second_page, "01_101.jpg"), (second_page, "02_102.jpg")],
         )
         self.assertEqual([event[0] for event in events], ["account_quota_exhausted", "account_switched"])
         self.assertEqual(events[0][1]["evidence"], quota_notice)
