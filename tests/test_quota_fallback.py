@@ -1,3 +1,4 @@
+from contextlib import ExitStack
 import importlib.util
 import json
 import sys
@@ -241,6 +242,18 @@ class CheckpointTests(unittest.TestCase):
 
 class FallbackCoordinatorTests(unittest.TestCase):
     def test_quota_retries_same_image_on_next_account_and_counts_once(self):
+        import run_chatgpt_batch_books34 as isolated
+        for module in (worker, isolated):
+            with self.subTest(worker=module.__name__):
+                self._check_quota_fallback(module)
+
+    def test_failed_image_does_not_emit_recovery_in_either_worker(self):
+        import run_chatgpt_batch_books34 as isolated
+        for module in (worker, isolated):
+            with self.subTest(worker=module.__name__):
+                self._check_quota_fallback(module, fail_first_image=True)
+
+    def _check_quota_fallback(self, worker, fail_first_image=False):
         class Context:
             def __init__(self, page):
                 self.pages = [page]
@@ -274,39 +287,49 @@ class FallbackCoordinatorTests(unittest.TestCase):
             process_calls.append((page, image.name))
             if len(process_calls) == 1:
                 raise worker.QuotaExhaustedError(quota_notice)
+            if fail_first_image and len(process_calls) == 2:
+                raise RuntimeError("Image download failed")
 
         fake_playwright = object()
-        with patch.object(worker, "RUN_MODE", "main"), \
-             patch.object(worker, "SERVICE", "chatgpt"), \
-             patch.object(worker, "BATCH_SIZE", 2), \
-             patch.object(worker, "START_FROM", ""), \
-             patch.object(worker, "ensure_dirs"), \
-             patch.object(worker, "init_progress"), \
-             patch.object(worker, "get_images", return_value=images), \
-             patch.object(worker, "get_next_batch", return_value=images), \
-             patch.object(worker, "get_job_state", return_value={"pending": 2, "pending_files": images, "state": "pending", "total": 2, "done": 0, "failed": 0}), \
-             patch.object(worker, "get_chatgpt_accounts", return_value=[
+        with ExitStack() as stack:
+            stack.enter_context(patch.object(worker, "RUN_MODE", "main"))
+            stack.enter_context(patch.object(worker, "SERVICE", "chatgpt"))
+            stack.enter_context(patch.object(worker, "BATCH_SIZE", 2))
+            stack.enter_context(patch.object(worker, "START_FROM", ""))
+            stack.enter_context(patch.object(worker, "ensure_dirs"))
+            stack.enter_context(patch.object(worker, "init_progress"))
+            stack.enter_context(patch.object(worker, "get_images", return_value=images))
+            stack.enter_context(patch.object(worker, "get_next_batch", return_value=images))
+            stack.enter_context(patch.object(worker, "get_job_state", return_value={"pending": 2, "pending_files": images, "state": "pending", "total": 2, "done": 0, "failed": 0}))
+            stack.enter_context(patch.object(worker, "get_chatgpt_accounts", return_value=[
                  {"id": "one", "name": "One", "profile_dir": "profile-one"},
                  {"id": "two", "name": "Two", "profile_dir": "profile-two"},
-             ]), \
-             patch.object(worker, "CFG", {"auto_account_fallback_enabled": True}), \
-             patch.object(worker, "launch_persistent_context", return_value=first_context), \
-             patch.object(worker, "open_existing_chatgpt_account", return_value=(second_context, second_page)), \
-             patch.object(worker, "minimize_own_browser"), \
-             patch.object(worker, "login_if_needed", return_value=authenticated_page), \
-             patch.object(worker, "process_one", side_effect=fake_process), \
-             patch.object(worker, "write_job_checkpoint"), \
-             patch.object(worker, "finish_batch_result", return_value=0), \
-             patch.object(worker, "emit_account_event", side_effect=lambda event, **data: events.append((event, data))), \
-             patch.object(worker, "sync_playwright", return_value=PlaywrightScope(fake_playwright)), \
-             patch.object(worker, "print"):
+             ]))
+            stack.enter_context(patch.object(worker, "CFG", {"auto_account_fallback_enabled": True}))
+            stack.enter_context(patch.object(worker, "launch_persistent_context", return_value=first_context))
+            stack.enter_context(patch.object(worker, "open_existing_chatgpt_account", return_value=(second_context, second_page)))
+            stack.enter_context(patch.object(worker, "minimize_own_browser"))
+            stack.enter_context(patch.object(worker, "login_if_needed", return_value=authenticated_page))
+            stack.enter_context(patch.object(worker, "process_one", side_effect=fake_process))
+            stack.enter_context(patch.object(worker, "write_job_checkpoint"))
+            stack.enter_context(patch.object(worker, "write_progress"))
+            stack.enter_context(patch.object(worker, "finish_batch_result", return_value=0))
+            stack.enter_context(patch.object(worker, "emit_account_event", side_effect=lambda event, **data: events.append((event, data))))
+            stack.enter_context(patch.object(worker, "sync_playwright", return_value=PlaywrightScope(fake_playwright)))
+            stack.enter_context(patch.object(worker, "print"))
+            stack.enter_context(patch.object(worker, "sleep"))
             self.assertEqual(worker.main(), 0)
 
+        initial_page = first_page if worker.__name__ == "run_chatgpt_batch_books34" else authenticated_page
         self.assertEqual(
             [(page, name) for page, name in process_calls],
-            [(authenticated_page, "01_101.jpg"), (second_page, "01_101.jpg"), (second_page, "02_102.jpg")],
+            [(initial_page, "01_101.jpg"), (second_page, "01_101.jpg"), (second_page, "02_102.jpg")],
         )
-        self.assertEqual([event[0] for event in events], ["account_quota_exhausted", "account_switched"])
+        created = [event for event in events if event[0] == "account_image_created"]
+        self.assertEqual([event[0] for event in events[:2]], ["account_quota_exhausted", "account_switched"])
+        self.assertEqual([event[1]["image"] for event in created],
+                         ["02_102.jpg"] if fail_first_image else ["01_101.jpg", "02_102.jpg"])
+        self.assertTrue(all(event[1]["account_id"] == "two" for event in created))
         self.assertEqual(events[0][1]["evidence"], quota_notice)
         self.assertTrue(first_context.closed)
 

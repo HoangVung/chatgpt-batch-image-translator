@@ -88,15 +88,30 @@ class QuotaLimits:
         }
         with self._lock:
             self.records[identity] = item
-            self.path.parent.mkdir(parents=True, exist_ok=True)
-            staging = self.path.with_suffix(".json.tmp")
-            try:
-                staging.write_text(json.dumps({"version": 1, "accounts": list(self.records.values())},
-                                              ensure_ascii=False, indent=2), encoding="utf-8")
-                os.replace(staging, self.path)
-            finally:
-                staging.unlink(missing_ok=True)
+            self._save(self.records)
         return dict(item)
+
+    def _save(self, records):
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        staging = self.path.with_suffix(".json.tmp")
+        try:
+            staging.write_text(json.dumps({"version": 1, "accounts": list(records.values())},
+                                          ensure_ascii=False, indent=2), encoding="utf-8")
+            os.replace(staging, self.path)
+        finally:
+            staging.unlink(missing_ok=True)
+
+    def clear(self, account_id):
+        """Remove a limit only after this account has successfully created an image."""
+        identity = str(account_id or "")
+        with self._lock:
+            if identity not in self.records:
+                return False
+            remaining = dict(self.records)
+            del remaining[identity]
+            self._save(remaining)
+            self.records = remaining
+            return True
 
     def snapshot(self, accounts=()):
         names = {str(item["id"]): item["name"] for item in accounts}

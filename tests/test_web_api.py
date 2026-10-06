@@ -372,6 +372,32 @@ class WebApiTests(unittest.TestCase):
         self.assertEqual(self.api._snapshot()["quota_limits"][0]["account_name"], "Vung-Personal")
         self.assertTrue((self.data_dir / "quota_limits.json").exists())
 
+    def test_successful_image_clears_only_recovered_account_and_preserves_notice_log(self):
+        from desktop.quota_limits import QuotaLimits
+        notice = "The limit resets in 10 hours."
+        for identity in ("one", "two"):
+            self.api._render_account_event({
+                "event": "account_quota_exhausted", "account_id": identity,
+                "account_name": identity, "evidence": notice,
+            })
+        self.api._render_account_event({"event": "account_switched", "account_id": "one"})
+        self.assertEqual(len(self.api._snapshot()["quota_limits"]), 2)
+        self.api.controller.handle_worker_output("__ACCOUNT_EVENT__=" + json.dumps({
+            "event": "account_image_created", "account_id": "one", "image": "01.png",
+        }) + "\n")
+        self.api._dispatch_once()
+        updates = [item for item in self.api.sent_events if item["type"] == "quota_limits_changed"]
+        self.assertEqual([row["account_id"] for row in updates[-1]["payload"]["accounts"]], ["two"])
+        self.assertEqual([row["account_id"] for row in self.api._snapshot()["quota_limits"]], ["two"])
+        self.assertEqual([row["account_id"] for row in QuotaLimits(self.data_dir / "quota_limits.json").snapshot()], ["two"])
+        self.assertIn(notice, "".join(self.api.controller.log_history))
+        before = len(updates)
+        self.api._render_account_event({"event": "account_image_created", "account_id": "one"})
+        self.assertEqual(len([item for item in self.api.sent_events if item["type"] == "quota_limits_changed"]), before)
+        self.api._render_account_event({"event": "account_image_created", "account_id": "two"})
+        self.assertEqual(self.api._snapshot()["quota_limits"], [])
+        self.assertEqual(self.api.sent_events[-1]["payload"]["accounts"], [])
+
     def test_quota_event_without_evidence_still_logs_account_warning(self):
         self.api._render_account_event({
             "event": "account_quota_exhausted", "account_name": "Account One",

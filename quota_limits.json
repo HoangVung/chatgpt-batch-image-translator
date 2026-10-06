@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "accounts": [
+    {
+      "account_id": "default",
+      "account_name": "Vung-Personal",
+      "detected_at": 1791188556.450476,
+      "reset_at": 1791238956.450476
+    }
+  ]
+}

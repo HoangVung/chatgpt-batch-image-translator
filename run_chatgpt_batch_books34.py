@@ -2137,6 +2137,13 @@ def main():
                             index = image_indices[img]
                             save_name = get_output_name(img)
                             process_one(page, image_indices, img)
+                            if SERVICE == "chatgpt":
+                                emit_account_event(
+                                    "account_image_created",
+                                    account_id=current_account["id"],
+                                    account_name=current_account["name"],
+                                    image=img.name,
+                                )
                             batch_result["success_count"] += 1
                             batch_result["completed_count"] += 1
                             break

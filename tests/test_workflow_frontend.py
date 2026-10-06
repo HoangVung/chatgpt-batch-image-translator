@@ -103,6 +103,24 @@ class WorkflowFrontendTests(unittest.TestCase):
             self.assertLessEqual(row['x'] + row['width'], card['x'] + card['width'])
             self.assertLessEqual(row['height'], 16)
 
+    def test_recovered_account_row_disappears_in_background_book(self):
+        page = self.page
+        accounts = [
+            {"account_id": identity, "account_name": identity, "reset_at": None, "reset_vn": None}
+            for identity in ("recovered", "limited")
+        ]
+        page.evaluate("(accounts) => emitWorkflow('book-2', 'quota_limits_changed', {accounts})", accounts)
+        self.assertEqual(page.locator('#tab-book-2 .workflow-quota-row').count(), 2)
+        page.evaluate("(accounts) => emitWorkflow('book-2', 'quota_limits_changed', {accounts})", accounts[1:])
+        self.assertEqual(page.locator('#tab-book-2 .workflow-quota-row').count(), 1)
+        self.assertNotIn("recovered", page.locator('#tab-book-2 .workflow-quota').inner_text())
+        self.assertIn("limited", page.locator('#tab-book-2 .workflow-quota').inner_text())
+        self.assertEqual(page.locator('#tab-book-1').get_attribute('aria-selected'), 'true')
+        page.evaluate("emitWorkflow('book-2', 'quota_limits_changed', {accounts: []})")
+        self.assertEqual(page.locator('#tab-book-2 .workflow-quota-row').count(), 0)
+        page.locator('#tab-book-2').click()
+        self.assertEqual(page.locator('#tab-book-2 .workflow-quota-row').count(), 0)
+
     def test_streaming_logs_preserve_selection_scroll_and_other_ui(self):
         page = self.page
         page.evaluate(r"""() => {

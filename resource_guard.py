@@ -132,13 +132,36 @@ def browser_profiles_in_use():
         command = ("$ErrorActionPreference = 'Stop'; [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); "
                    "Get-CimInstance Win32_Process -Filter \"Name = 'chrome.exe' OR Name = 'msedge.exe' OR Name = 'chromium.exe'\" "
                    "| Select-Object -ExpandProperty CommandLine | ConvertTo-Json -Compress")
-        result = subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", command],
-                                capture_output=True, text=True, encoding="utf-8", errors="replace",
-                                creationflags=subprocess.CREATE_NO_WINDOW, timeout=12)
-        if result.returncode:
-            raise ResourceConflict("Không kiểm tra được browser đang chạy / Cannot inspect running browsers.")
-        raw = json.loads(result.stdout.strip() or "[]")
-        commands = [raw] if isinstance(raw, str) else (raw or [])
+        # CIM can take more than 12 seconds on a busy Windows machine. Retry
+        # once, but never treat an unavailable inventory as an empty inventory.
+        for attempt in range(2):
+            try:
+                result = subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", command],
+                                        capture_output=True, text=True, encoding="utf-8", errors="replace",
+                                        creationflags=subprocess.CREATE_NO_WINDOW, timeout=30)
+            except subprocess.TimeoutExpired as exc:
+                if attempt == 0:
+                    print("Windows phản hồi chậm khi kiểm tra browser; đang thử lại một lần "
+                          "/ Browser inventory timed out; retrying once.", flush=True)
+                    continue
+                raise ResourceConflict(
+                    "Windows phản hồi quá chậm khi kiểm tra browser (2 lần, tối đa 30 giây/lần). "
+                    "Chưa khởi chạy batch. Hãy chờ máy ổn định rồi chạy lại batch "
+                    "/ Timed out inspecting running browsers after 2 attempts.") from exc
+            except OSError as exc:
+                raise ResourceConflict(
+                    "Không chạy được công cụ kiểm tra browser / Cannot start browser inventory.") from exc
+            if result.returncode:
+                raise ResourceConflict("Không kiểm tra được browser đang chạy / Cannot inspect running browsers.")
+            try:
+                raw = json.loads(result.stdout.strip() or "[]")
+            except json.JSONDecodeError as exc:
+                raise ResourceConflict(
+                    "Kết quả kiểm tra browser không hợp lệ / Invalid browser inventory.") from exc
+            commands = [raw] if isinstance(raw, str) else (raw or [])
+            if not isinstance(commands, list) or any(item is not None and not isinstance(item, str) for item in commands):
+                raise ResourceConflict("Kết quả kiểm tra browser không hợp lệ / Invalid browser inventory.")
+            break
     elif Path("/proc").exists():
         for path in Path("/proc").glob("[0-9]*/cmdline"):
             try:
@@ -169,6 +192,16 @@ class ResourceLease:
 
     def __enter__(self):
         validate_resources(self.resources)
+        # Inventory may take up to two 30-second attempts. Do not hold the
+        # shared index mutex while waiting: other books must be able to claim
+        # or release resources. Active worker leases are still checked under
+        # the mutex below, so simultaneous starts cannot share a profile.
+        if self.inspect_browsers:
+            requested = [r["path"] for r in self.resources if r["kind"] == "profile"]
+            if requested:
+                for busy in browser_profiles_in_use():
+                    if any(overlaps(busy, path) for path in requested):
+                        raise ResourceConflict(f"Profile đang mở / Profile is already open: {busy}")
         with _index_lock(self.directory):
             for path in self.directory.glob("*.json"):
                 lock_path = path.with_suffix(".lock")
@@ -200,12 +233,6 @@ class ResourceLease:
                 if not active:
                     path.unlink(missing_ok=True)
                     lock_path.unlink(missing_ok=True)
-            if self.inspect_browsers:
-                requested = [r["path"] for r in self.resources if r["kind"] == "profile"]
-                if requested:
-                    for busy in browser_profiles_in_use():
-                        if any(overlaps(busy, path) for path in requested):
-                            raise ResourceConflict(f"Profile đang mở / Profile is already open: {busy}")
             self.stream = _open_lock(self.path.with_suffix(".lock"))
             try:
                 _lock(self.stream)

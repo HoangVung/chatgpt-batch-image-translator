@@ -229,6 +229,17 @@ class WebApi:
 
     def _render_account_event(self, event: dict[str, Any]) -> None:
         event_name = event.get("event")
+        if event_name == "account_image_created":
+            try:
+                changed = self._quota_limits.clear(event.get("account_id"))
+            except OSError as exc:
+                self._append_log("⚠ Không xóa được thông báo giới hạn tạo ảnh: " + str(exc) + "\n")
+                return
+            if changed:
+                self._push_event("quota_limits_changed", {
+                    "accounts": self._quota_limits.snapshot(self.settings.get("chatgpt_accounts", [])),
+                })
+            return
         mapping = {
             "account_quota_exhausted": ("account_quota_log", {"name": event.get("account_name", "ChatGPT")}),
             "account_switched": ("account_switched_log", {

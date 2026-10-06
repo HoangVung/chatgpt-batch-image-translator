@@ -73,6 +73,36 @@ class QuotaLimitTests(unittest.TestCase):
                 self.assertGreater(now[0], 100)
                 self.assertEqual(caught.exception.detected_at, 100)
 
+    def test_recovered_account_is_removed_durably_without_clearing_others(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "quota_limits.json"
+            store = QuotaLimits(path, clock=lambda: 100000)
+            for identity in ("one", "two"):
+                store.record({"account_id": identity, "evidence": "Limit reached."})
+            self.assertFalse(store.clear(None))
+            self.assertFalse(store.clear("unknown"))
+            self.assertTrue(store.clear("one"))
+            self.assertFalse(store.clear("one"))
+            self.assertEqual([row["account_id"] for row in store.snapshot()], ["two"])
+            restored = QuotaLimits(path)
+            self.assertEqual([row["account_id"] for row in restored.snapshot()], ["two"])
+            self.assertTrue(restored.clear("two"))
+            self.assertEqual(QuotaLimits(path).snapshot(), [])
+            restored.record({"account_id": "one", "evidence": "Try again in 2 hours."})
+            self.assertEqual(QuotaLimits(path).snapshot()[0]["account_id"], "one")
+
+    def test_failed_clear_preserves_persisted_and_in_memory_limit(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "quota_limits.json"
+            store = QuotaLimits(path)
+            store.record({"account_id": "one"})
+            with patch("desktop.quota_limits.os.replace", side_effect=OSError("disk error")):
+                with self.assertRaises(OSError):
+                    store.clear("one")
+            self.assertEqual(store.snapshot()[0]["account_id"], "one")
+            self.assertEqual(QuotaLimits(path).snapshot()[0]["account_id"], "one")
+            self.assertFalse(path.with_suffix(".json.tmp").exists())
+
     def test_book_files_are_independent(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

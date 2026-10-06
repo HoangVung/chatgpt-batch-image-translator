@@ -194,6 +194,64 @@ class GuardTests(unittest.TestCase):
             with patch("resource_guard.subprocess.run", return_value=result):
                 self.assertEqual(browser_profiles_in_use(), {canonical_path(profile)})
 
+    @unittest.skipUnless(os.name == "nt", "Windows browser inventory")
+    def test_browser_inventory_retries_timeout_and_keeps_detected_profiles(self):
+        profile = self.root / "profile sách A"
+        command = 'chrome.exe --user-data-dir="' + str(profile) + '"'
+        result = subprocess.CompletedProcess([], 0, json.dumps([command]), "")
+        with patch("resource_guard.subprocess.run", side_effect=[subprocess.TimeoutExpired("powershell.exe", 30), result]) as inventory:
+            with patch("builtins.print") as log:
+                self.assertEqual(browser_profiles_in_use(), {canonical_path(profile)})
+        self.assertEqual(inventory.call_count, 2)
+        self.assertTrue(all(call.kwargs["timeout"] == 30 for call in inventory.call_args_list))
+        self.assertTrue(all(call.kwargs["creationflags"] == subprocess.CREATE_NO_WINDOW for call in inventory.call_args_list))
+        log.assert_called_once()
+
+    @unittest.skipUnless(os.name == "nt", "Windows browser inventory")
+    def test_browser_inventory_exhausted_timeout_prevents_lease_creation(self):
+        cfg = self.config("A")
+        locks = self.root / "locks"
+        with patch("resource_guard.subprocess.run", side_effect=subprocess.TimeoutExpired("powershell.exe", 30)) as inventory:
+            with patch("builtins.print"):
+                with self.assertRaisesRegex(ResourceConflict, "after 2 attempts"):
+                    with ResourceLease(workflow_resources(cfg), directory=locks):
+                        self.fail("An unavailable inventory must not permit a batch")
+        self.assertEqual(inventory.call_count, 2)
+        self.assertEqual(list(locks.glob("*.json")), [])
+        self.assertFalse(Path(cfg["download_folder"]).exists())
+
+    @unittest.skipUnless(os.name == "nt", "Windows browser inventory")
+    def test_browser_inventory_errors_do_not_become_empty_inventory(self):
+        cases = [
+            (subprocess.CompletedProcess([], 1, "", "CIM failed"), "Cannot inspect"),
+            (subprocess.CompletedProcess([], 0, "not json", ""), "Invalid browser inventory"),
+            (subprocess.CompletedProcess([], 0, '{"unexpected":true}', ""), "Invalid browser inventory"),
+            (FileNotFoundError("powershell.exe"), "Cannot start browser inventory"),
+        ]
+        for result, message in cases:
+            with self.subTest(message=message, result=str(result)):
+                kwargs = {"side_effect": result} if isinstance(result, Exception) else {"return_value": result}
+                with patch("resource_guard.subprocess.run", **kwargs):
+                    with self.assertRaisesRegex(ResourceConflict, message):
+                        browser_profiles_in_use()
+
+    def test_browser_inventory_does_not_block_other_books_output_lease(self):
+        cfg = self.config("A")
+        other = self.config("B")
+        locks = self.root / "locks"
+        output = [{"kind": "output", "path": canonical_path(other["download_folder"])}]
+        checked = []
+
+        def inventory_while_exporting():
+            with ResourceLease(output, directory=locks, inspect_browsers=False):
+                checked.append(True)
+            return set()
+
+        with patch("resource_guard.browser_profiles_in_use", side_effect=inventory_while_exporting):
+            with ResourceLease(workflow_resources(cfg), directory=locks):
+                self.assertEqual(checked, [True])
+        self.assertEqual(list(locks.glob("*.json")), [])
+
     def test_snapshot_failure_does_not_fall_back_to_root_config(self):
         cfg = self.config("A")
         env = dict(os.environ, BATCH_TRANSLATOR_SETTINGS_FILE=str(self.root / "missing.json"), PYTHONIOENCODING="utf-8")
