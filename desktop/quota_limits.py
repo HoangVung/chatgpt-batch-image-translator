@@ -61,6 +61,7 @@ class QuotaLimits:
         self.clock = clock or time.time
         self._lock = threading.RLock()
         self.records = {}
+        self._due_ids = set()
         try:
             data = json.loads(self.path.read_text(encoding="utf-8"))
             for item in data.get("accounts", []):
@@ -112,6 +113,19 @@ class QuotaLimits:
             self._save(remaining)
             self.records = remaining
             return True
+
+    def expire_due(self):
+        """Refresh due estimates; elapsed time does not confirm account recovery."""
+        with self._lock:
+            now = self.clock()
+            due = {
+                identity for identity, item in self.records.items()
+                if item["reset_at"] is not None and item["reset_at"] <= now
+            }
+            changed = due != self._due_ids
+            self._due_ids = due
+            return changed
+
 
     def snapshot(self, accounts=()):
         names = {str(item["id"]): item["name"] for item in accounts}

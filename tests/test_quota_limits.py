@@ -103,6 +103,39 @@ class QuotaLimitTests(unittest.TestCase):
             self.assertEqual(QuotaLimits(path).snapshot()[0]["account_id"], "one")
             self.assertFalse(path.with_suffix(".json.tmp").exists())
 
+    def test_due_estimates_remain_until_confirmed_recovery(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "quota_limits.json"
+            now = [100000]
+            store = QuotaLimits(path, clock=lambda: now[0])
+            store.record({"account_id": "due", "evidence": "Try again in 1 minute."})
+            store.record({"account_id": "future", "evidence": "Try again in 2 hours."})
+            store.record({"account_id": "unknown", "evidence": "Limit reached."})
+            self.assertFalse(store.expire_due())
+            now[0] += 60
+            self.assertTrue(store.expire_due())
+            self.assertEqual([row["account_id"] for row in store.snapshot()], ["due", "future", "unknown"])
+            self.assertTrue(store.snapshot()[0]["estimate_due"])
+            self.assertEqual([row["account_id"] for row in QuotaLimits(path).snapshot()], ["due", "future", "unknown"])
+            self.assertFalse(store.expire_due())
+
+
+    def test_due_estimate_refresh_does_not_write_or_clear_persisted_limits(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "quota_limits.json"
+            now = [100000]
+            store = QuotaLimits(path, clock=lambda: now[0])
+            store.record({"account_id": "due", "evidence": "Try again in 1 minute."})
+            now[0] += 60
+            before = path.read_bytes()
+            with patch("desktop.quota_limits.os.replace", side_effect=OSError("disk error")) as replace:
+                self.assertTrue(store.expire_due())
+                replace.assert_not_called()
+            self.assertEqual(path.read_bytes(), before)
+            self.assertEqual(store.snapshot()[0]["account_id"], "due")
+            self.assertEqual(QuotaLimits(path).snapshot()[0]["account_id"], "due")
+
+
     def test_book_files_are_independent(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

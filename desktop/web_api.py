@@ -112,6 +112,9 @@ class WebApi:
         self._folder_progress_thread = None
         self._folder_progress_dirty = False
         self._quota_limits = QuotaLimits(self.data_dir / "quota_limits.json")
+        self._quota_expiry_error = None
+        self._last_attempted_folder = None
+        self._last_attempted_account = None
         self._configure_controller()
 
     def _attach_window(self, window: Any) -> None:
@@ -134,6 +137,9 @@ class WebApi:
     def _dispatch_once(self) -> list[dict[str, Any]]:
         delivered: list[dict[str, Any]] = []
         with self._dispatch_lock:
+            expired = self._expire_due_quotas()
+            if expired:
+                delivered.append(expired)
             while True:
                 events = self.controller.drain_events()
                 if not events:
@@ -149,6 +155,23 @@ class WebApi:
                             {"source_event": event.type, "error": str(exc)},
                         ))
         return delivered
+
+    def _expire_due_quotas(self) -> dict[str, Any] | None:
+        try:
+            changed = self._quota_limits.expire_due()
+        except OSError as exc:
+            error = str(exc)
+            if error != self._quota_expiry_error:
+                self._quota_expiry_error = error
+                self._append_log("⚠ Không cập nhật được mốc phục hồi quota đã qua: " + error + "\n")
+            return None
+        self._quota_expiry_error = None
+        if changed:
+            return self._push_event("quota_limits_changed", {
+                "accounts": self._quota_limits.snapshot(self.settings.get("chatgpt_accounts", [])),
+            })
+        return None
+
 
     def _push_event(self, event_type: str, payload: dict[str, Any]) -> dict[str, Any]:
         with self._event_lock:
@@ -229,6 +252,12 @@ class WebApi:
 
     def _render_account_event(self, event: dict[str, Any]) -> None:
         event_name = event.get("event")
+        if event_name in {"account_quota_exhausted", "account_image_created"} and event.get("account_id"):
+            self._get_last_attempted_account()
+            self._last_attempted_account = {
+                "id": str(event["account_id"]),
+                "name": str(event.get("account_name") or "ChatGPT"),
+            }
         if event_name == "account_image_created":
             try:
                 changed = self._quota_limits.clear(event.get("account_id"))
@@ -342,7 +371,34 @@ class WebApi:
             # Coalesce changes during a scan; discard results for old folders.
             self._request_folder_progress()
 
+    def _get_last_attempted_account(self) -> dict[str, str] | None:
+        # The selected account may change while a job waits. The checkpoint
+        # retains the worker's most recent account independently of settings.
+        folder = str(self.settings.get("download_folder") or "")
+        if folder != self._last_attempted_folder:
+            self._last_attempted_folder = folder
+            self._last_attempted_account = None
+            if folder:
+                try:
+                    checkpoint = json.loads((Path(folder) / "job_checkpoint.json").read_text(encoding="utf-8"))
+                    account = checkpoint.get("active_account")
+                    if checkpoint.get("stage") != "starting" and isinstance(account, dict) and account.get("id"):
+                        self._last_attempted_account = {
+                            "id": str(account["id"]), "name": str(account.get("name") or "ChatGPT"),
+                        }
+                except (OSError, ValueError, TypeError, AttributeError):
+                    pass
+        if self._last_attempted_account is None:
+            return None
+        account = dict(self._last_attempted_account)
+        configured = next((a for a in self.settings.get("chatgpt_accounts", []) if a["id"] == account["id"]), None)
+        if configured:
+            account["name"] = configured["name"]
+        return account
+
+
     def _snapshot(self) -> dict[str, Any]:
+        self._expire_due_quotas()
         folder_progress = self._request_folder_progress()
         state = asdict(self.controller.state)
         state["status"] = dict(self.status)
@@ -351,6 +407,7 @@ class WebApi:
         state["run_id"] = self.run_id
         state["folder_progress"] = folder_progress
         state["quota_limits"] = self._quota_limits.snapshot(self.settings.get("chatgpt_accounts", []))
+        state["last_attempted_account"] = self._get_last_attempted_account()
         return json_safe(state)
 
     def _public_settings(self) -> dict[str, Any]:

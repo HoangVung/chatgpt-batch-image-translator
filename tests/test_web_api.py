@@ -372,6 +372,47 @@ class WebApiTests(unittest.TestCase):
         self.assertEqual(self.api._snapshot()["quota_limits"][0]["account_name"], "Vung-Personal")
         self.assertTrue((self.data_dir / "quota_limits.json").exists())
 
+    def test_due_quota_remains_while_idle_and_after_restart(self):
+        from desktop.quota_limits import QuotaLimits
+
+        now = [100000]
+        self.api._quota_limits.clock = lambda: now[0]
+        for identity, evidence in (
+            ("due", "Try again in 1 minute."),
+            ("future", "Try again in 2 hours."),
+            ("unknown", "Limit reached."),
+        ):
+            self.api._render_account_event({
+                "event": "account_quota_exhausted", "account_id": identity,
+                "account_name": identity, "evidence": evidence,
+            })
+        before = len([item for item in self.api.sent_events if item["type"] == "quota_limits_changed"])
+        now[0] += 60
+        delivered = self.api._dispatch_once()
+        updates = [item for item in delivered if item["type"] == "quota_limits_changed"]
+        self.assertEqual(len(updates), 1)
+        self.assertEqual(len([item for item in self.api.sent_events if item["type"] == "quota_limits_changed"]), before + 1)
+        self.assertEqual([row["account_id"] for row in updates[0]["payload"]["accounts"]], ["due", "future", "unknown"])
+        self.assertTrue(updates[0]["payload"]["accounts"][0]["estimate_due"])
+        self.assertEqual([row["account_id"] for row in self.api._snapshot()["quota_limits"]], ["due", "future", "unknown"])
+        self.assertEqual([row["account_id"] for row in QuotaLimits(self.data_dir / "quota_limits.json").snapshot()], ["due", "future", "unknown"])
+
+
+    def test_startup_snapshot_keeps_due_quota_loaded_from_disk(self):
+        from desktop.quota_limits import QuotaLimits
+
+        path = self.data_dir / "quota_limits.json"
+        store = QuotaLimits(path, clock=lambda: 100000)
+        store.record({"account_id": "due", "evidence": "Try again in 1 minute."})
+        self.api._quota_limits = QuotaLimits(path, clock=lambda: 100060)
+        initial = self.api.get_initial_state()
+        self.assertTrue(initial["ok"])
+        rows = initial["data"]["controller"]["quota_limits"]
+        self.assertEqual([row["account_id"] for row in rows], ["due"])
+        self.assertTrue(rows[0]["estimate_due"])
+        self.assertEqual([row["account_id"] for row in QuotaLimits(path).snapshot()], ["due"])
+
+
     def test_successful_image_clears_only_recovered_account_and_preserves_notice_log(self):
         from desktop.quota_limits import QuotaLimits
         notice = "The limit resets in 10 hours."

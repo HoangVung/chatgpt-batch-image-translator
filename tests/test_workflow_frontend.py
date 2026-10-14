@@ -24,6 +24,7 @@ class WorkflowFrontendTests(unittest.TestCase):
             manager._shutdown()
         initial["sessions"]["book-1"]["settings"]["image_folder"] = "D:/book-A/source"
         initial["sessions"]["book-1"]["settings"]["download_folder"] = "D:/book-A/output"
+        self.initial = initial
         bootstrap = r"""
           const initial = JSON.parse(%s);
           window.calls = [];
@@ -101,7 +102,89 @@ class WorkflowFrontendTests(unittest.TestCase):
             card = page.locator('#tab-book-2').bounding_box()
             self.assertGreaterEqual(row['x'], card['x'])
             self.assertLessEqual(row['x'] + row['width'], card['x'] + card['width'])
-            self.assertLessEqual(row['height'], 16)
+            self.assertLessEqual(row['y'] + row['height'], card['y'] + card['height'])
+            self.assertTrue(page.locator('#tab-book-2 .workflow-quota-row').first.evaluate('(row) => row.scrollWidth <= row.clientWidth'))
+
+    def test_book_one_restores_both_quotas_and_distinguishes_last_attempted_account(self):
+        from datetime import datetime
+        from desktop.runtime import save_settings
+        from desktop.web_api import WebApi
+
+        observed = datetime.fromisoformat("2026-10-14T14:00:00+07:00").timestamp()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            accounts = [{"id": identity, "name": name, "profile_dir": str(root / identity)}
+                        for identity, name in (("business", "Vung-Business"), ("personal", "Vung-Personal"))]
+            api = WebApi(app_dir=PROJECT_ROOT, data_dir=root)
+            api.settings.update(chatgpt_accounts=accounts, active_chatgpt_account_id="personal",
+                                download_folder=str(root / "output"))
+            for account, duration in zip(accounts, ("6 minutes", "12 hours")):
+                api._render_account_event({"event": "account_quota_exhausted",
+                    "account_id": account["id"], "account_name": account["name"],
+                    "detected_at": observed, "evidence": "The limit resets in " + duration + "."})
+            output = root / "output"
+            output.mkdir()
+            (output / "job_checkpoint.json").write_text(json.dumps({"version": 1,
+                "active_account": accounts[1], "state": "waiting_quota", "current_image": "301_301.jpg"}))
+            save_settings(api.settings_path, api.settings)
+            restored = WebApi(app_dir=PROJECT_ROOT, data_dir=root)
+            restored._quota_limits.clock = lambda: observed + 361
+            payload = restored.get_initial_state()["data"]
+            api._shutdown()
+            restored._shutdown()
+        payload["controller"].update(folder_progress={"done": 300, "total": 301},
+            status={"key": "waiting_quota_outcome", "params": {"done": 300, "total": 301}})
+        initial = self.initial
+        initial["sessions"]["book-1"] = payload
+        self.page.close()
+        self.page = self.browser.new_page(viewport={"width": 1180, "height": 820})
+        self.page.on("pageerror", lambda error: self.errors.append(str(error)))
+        self.page.add_init_script("""
+          const quotaInitial = %s;
+          Date.now = () => %s;
+          window.quotaRecords = quotaInitial.sessions;
+          window.pywebview = {api: {get_initial_state: id => Promise.resolve({ok:true,
+            data: structuredClone(id ? quotaRecords[id] : quotaInitial)})}};
+          window.emitQuota = (type,payload) => {
+            const c = quotaRecords['book-1'].controller;
+            window.batchTranslatorReceive({session_id:'book-1',sequence:++c.sequence,type,payload});
+          };
+        """ % (json.dumps(initial, ensure_ascii=False), int((observed + 361) * 1000)))
+        page = self.page
+        page.goto(self.ui_url)
+        page.wait_for_selector('#tab-book-1 .workflow-quota-row')
+        for _ in range(2):
+            self.assertEqual(page.locator('#tab-book-1 .workflow-quota-row').count(), 2)
+            text = page.locator('#tab-book-1 .workflow-quota').inner_text()
+            self.assertIn('Vung-Business → 14/10 14:06 VN', text)
+            self.assertIn('Vung-Personal → 15/10 02:00 VN', text)
+            self.assertIn('chờ xác nhận', text)
+            self.assertIn('300/301', page.locator('#tab-book-1 .workflow-folder-progress').inner_text())
+            self.assertIn('Vung-Personal', page.locator('#tab-book-1 .workflow-last-account').inner_text())
+            page.reload()
+            page.wait_for_selector('#tab-book-1 .workflow-quota-row')
+        page.evaluate("emitQuota('account_event', {event:{event:'account_switched', account_id:'business', account_name:'Vung-Business'}})")
+        self.assertIn('Vung-Business', page.locator('#tab-book-1 .workflow-account').inner_text())
+        self.assertIn('Vung-Personal', page.locator('#tab-book-1 .workflow-last-account').inner_text())
+        self.assertEqual(page.locator('#tab-book-1 .workflow-quota-row').count(), 2)
+        for width, height in ((1180, 820), (900, 700)):
+            page.set_viewport_size({"width": width, "height": height})
+            for row in page.locator('#tab-book-1 .workflow-quota-row').all():
+                self.assertTrue(row.is_visible())
+                self.assertTrue(row.evaluate('(row) => row.scrollWidth <= row.clientWidth'))
+                box, card = row.bounding_box(), page.locator('#tab-book-1').bounding_box()
+                self.assertLessEqual(box['y'] + box['height'], card['y'] + card['height'])
+        screenshot = os.environ.get('QUOTA_SYNC_SCREENSHOT')
+        if screenshot:
+            page.set_viewport_size({"width": 1180, "height": 820})
+            page.screenshot(path=screenshot)
+        remaining = payload['controller']['quota_limits'][:1]
+        page.evaluate("emitQuota('account_event', {event:{event:'account_image_created',account_id:'personal',account_name:'Vung-Personal'}})")
+        page.evaluate("accounts => emitQuota('quota_limits_changed', {accounts})", remaining)
+        self.assertEqual(page.locator('#tab-book-1 .workflow-quota-row').count(), 1)
+        self.assertIn('Vung-Business', page.locator('#tab-book-1 .workflow-quota').inner_text())
+        self.assertNotIn('Vung-Personal', page.locator('#tab-book-1 .workflow-quota').inner_text())
+
 
     def test_recovered_account_row_disappears_in_background_book(self):
         page = self.page

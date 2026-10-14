@@ -61,6 +61,7 @@ function renderQuotaRows(button, target) {
   for (const item of records) {
     const row = document.createElement("span");
     row.className = "workflow-quota-row";
+    row.dataset.accountId = item.account_id;
     const due = item.reset_at != null && item.reset_at * 1000 <= Date.now();
     row.classList.toggle("estimate-due", due);
     setText(row, t(item.reset_vn ? "quota_recovery_line" : "quota_recovery_unknown",
@@ -69,6 +70,12 @@ function renderQuotaRows(button, target) {
       ? t("quota_recovery_title", {detected: item.detected_vn, reset: item.reset_vn_full}) +
         (due ? " " + t("quota_recovery_due") : "")
       : t("quota_recovery_unknown_title"));
+    if (due) {
+      const confirmation = document.createElement("span");
+      confirmation.className = "workflow-quota-confirmation";
+      confirmation.textContent = t("quota_recovery_pending");
+      row.append(confirmation);
+    }
     container.append(row);
   }
 }
@@ -86,7 +93,7 @@ function renderTabs() {
       button.setAttribute("role", "tab");
       button.setAttribute("aria-controls", "workflow-panel");
       button.append(document.createElement("strong"));
-      for (const className of ["workflow-status", "workflow-folder-progress", "workflow-account"]) {
+      for (const className of ["workflow-status", "workflow-folder-progress", "workflow-account", "workflow-last-account"]) {
         const line = document.createElement("small");
         line.className = className;
         button.append(line);
@@ -111,14 +118,21 @@ function renderTabs() {
     const folder = c.folder_progress || {};
     const folderStatus = t("tab_folder_progress", {done: folder.done ?? "—", total: folder.total ?? "—"});
     const settings = {...target.settings, ...target.draft};
-    const account = (settings.chatgpt_accounts || []).find(item => item.id === settings.active_chatgpt_account_id);
-    const accountLabel = settings.service === "gemini" ? "Google Gemini" : t("tab_account", {name: account?.name || "—"});
+    const currentAccount = (settings.chatgpt_accounts || []).find(item => item.id === settings.active_chatgpt_account_id);
+    const lastAttemptedAccount = c.last_attempted_account;
+    const accountLabel = settings.service === "gemini" ? "Google Gemini" : t("tab_account", {name: currentAccount?.name || "—"});
+    const lastAccountLabel = settings.service === "chatgpt" && lastAttemptedAccount
+      ? t("tab_last_attempted_account", {name: lastAttemptedAccount.name}) : "";
     setText(button.querySelector(".workflow-status"), status);
     setText(button.querySelector(".workflow-folder-progress"), folderStatus);
     const accountLine = button.querySelector(".workflow-account");
     setText(accountLine, accountLabel);
     setProperty(accountLine, "title", accountLabel);
-    setProperty(button, "title", `${label}: ${status}\n${folderStatus}\n${accountLabel}\n${target.settings.image_folder || ""}`);
+    const lastAccountLine = button.querySelector(".workflow-last-account");
+    lastAccountLine.hidden = !lastAccountLabel;
+    setText(lastAccountLine, lastAccountLabel);
+    setProperty(lastAccountLine, "title", lastAccountLabel);
+    setProperty(button, "title", `${label}: ${status}\n${folderStatus}\n${accountLabel}\n${lastAccountLabel}\n${target.settings.image_folder || ""}`);
     setAttribute(button, "aria-selected", target === state);
     setProperty(button, "tabIndex", target === state ? 0 : -1);
     setAttribute(button, "data-attention", attention);
@@ -400,6 +414,11 @@ window.batchTranslatorReceive = (message) => {
   }
   if (message.type === "auto_next_cancelled" || message.type === "auto_next_running") {
     target.controller.auto_next_active = false;
+  }
+  if (message.type === "account_event" && ["account_quota_exhausted", "account_image_created"].includes(payload.event?.event) && payload.event.account_id) {
+    target.controller.last_attempted_account = {
+      id: payload.event.account_id, name: payload.event.account_name || "ChatGPT",
+    };
   }
   if (message.type === "account_event" && payload.event?.event === "account_switched") {
     target.settings.active_chatgpt_account_id = payload.event.account_id;
