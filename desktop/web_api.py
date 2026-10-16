@@ -29,6 +29,7 @@ from desktop.runtime import (
     normalize_chatgpt_accounts,
     save_settings as write_settings,
     write_launch_snapshot,
+    write_layout_launch_snapshot,
 )
 from desktop.web_scheduler import WebScheduler
 from desktop.web_text import WEB_TEXT
@@ -47,6 +48,8 @@ RUN_CONFIGURATION_KEYS = {
     "auto_next_enabled",
     "auto_next_delay_minutes",
     "auto_account_fallback_enabled",
+    "layout_consistency_enabled",
+    "layout_profile_path",
     "service",
 }
 
@@ -101,6 +104,7 @@ class WebApi:
         self.status = {"key": "ready", "params": {}}
         self.sequence = 0
         self.sent_events: list[dict[str, Any]] = []
+        self._reflow_lock = threading.Lock()
         self._event_lock = threading.Lock()
         self._dispatch_lock = self.controller._lock
         self._stop_dispatcher = threading.Event()
@@ -171,7 +175,6 @@ class WebApi:
                 "accounts": self._quota_limits.snapshot(self.settings.get("chatgpt_accounts", [])),
             })
         return None
-
 
     def _push_event(self, event_type: str, payload: dict[str, Any]) -> dict[str, Any]:
         with self._event_lock:
@@ -270,7 +273,10 @@ class WebApi:
                 })
             return
         mapping = {
-            "account_quota_exhausted": ("account_quota_log", {"name": event.get("account_name", "ChatGPT")}),
+            "account_quota_exhausted": (
+                "account_upload_quota_log" if event.get("quota_kind") == "upload" else "account_quota_log",
+                {"name": event.get("account_name", "ChatGPT")},
+            ),
             "account_switched": ("account_switched_log", {
                 "name": event.get("account_name", "ChatGPT"), "image": event.get("image", ""),
             }),
@@ -396,7 +402,6 @@ class WebApi:
             account["name"] = configured["name"]
         return account
 
-
     def _snapshot(self) -> dict[str, Any]:
         self._expire_due_quotas()
         folder_progress = self._request_folder_progress()
@@ -475,6 +480,57 @@ class WebApi:
         except Exception as exc:
             return failure(exc)
 
+    def choose_layout_profile(self) -> dict[str, Any]:
+        """Choose one local JSON profile; settings change only when the form is saved."""
+        try:
+            if self.window is None:
+                raise RuntimeError("window is not ready")
+            import webview
+
+            selected = self.window.create_file_dialog(
+                webview.FileDialog.OPEN, allow_multiple=False,
+                file_types=("Layout profile (*.json)",),
+            )
+            path = str(selected[0]) if selected else None
+            if path is not None and Path(path).suffix.lower() != ".json":
+                raise ValueError("layout profile must be a JSON file")
+            return success({"path": path, "cancelled": path is None})
+        except Exception as exc:
+            return failure(exc)
+
+    def full_reflow_saved(self, output_folder: Any = None) -> dict[str, Any]:
+        """Render saved datasets offline; no settings/progress/worker changes."""
+        if not self._reflow_lock.acquire(blocking=False):
+            return failure("Full Reflow đang chạy / Full Reflow is already running")
+        try:
+            with self._dispatch_lock:
+                if self._closed:
+                    raise RuntimeError("App is closing")
+                if self.controller.is_running() or self.controller.state.auto_next_active:
+                    raise ValueError("Dừng batch của tab này trước khi dàn trang / Stop this tab's batch first")
+            if self.window is None:
+                raise RuntimeError("window is not ready")
+            import webview
+            selected = self.window.create_file_dialog(webview.FileDialog.FOLDER)
+            if not selected:
+                return success({"cancelled": True})
+            target = str(output_folder or self.settings.get("download_folder", "")).strip()
+            if not target:
+                raise ValueError("Chọn thư mục kết quả trước / Select an output folder first")
+            from layout_full_reflow import reflow_saved_folder
+            result = reflow_saved_folder(selected[0], Path(target) / "full_reflow_results")
+            self._append_log(f"Full Reflow: {result['succeeded']} capture, {result['pages']} trang, {result['failed']} lỗi. {result['output']}\n")
+            if os.name == "nt":
+                try:
+                    os.startfile(result["output"])
+                except OSError:
+                    pass  # Successful rendering must survive an Explorer error.
+            return success(dict(result, cancelled=False))
+        except Exception as exc:
+            return failure(exc)
+        finally:
+            self._reflow_lock.release()
+
     def start_batch(self, mode: Any) -> dict[str, Any]:
         try:
             if mode not in VALID_MODES:
@@ -486,6 +542,8 @@ class WebApi:
             return failure(exc)
 
     def _start(self, mode: str, *, auto_started: bool = False) -> None:
+        if self._reflow_lock.locked():
+            raise RuntimeError("Đợi Full Reflow hoàn tất / Wait for Full Reflow to finish")
         if self.controller.is_running():
             raise RuntimeError("a batch is already running")
         if mode == "force" and not str(self.settings.get("start_from", "")).strip():
@@ -515,6 +573,8 @@ class WebApi:
         self._snapshot_path = write_launch_snapshot(self._public_settings(), self.data_dir / "run_configs")
         self.run_id = uuid.uuid4().hex
         try:
+            if self.settings.get("service") == "chatgpt" and mode != "login":
+                write_layout_launch_snapshot(self.settings, self._snapshot_path)
             launch = build_process_launch(self.settings, mode, app_dir=self.app_dir,
                                           data_dir=self.data_dir, settings_file=self._snapshot_path, session_id=self.session_id)
             if not self.controller.start(mode, launch, auto_started=auto_started):
@@ -525,6 +585,7 @@ class WebApi:
 
     def _remove_snapshot(self):
         if self._snapshot_path is not None:
+            self._snapshot_path.with_suffix(".layout.json").unlink(missing_ok=True)
             self._snapshot_path.unlink(missing_ok=True)
             self._snapshot_path = None
 

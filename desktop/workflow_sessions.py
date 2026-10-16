@@ -14,7 +14,7 @@ from resource_guard import (ResourceConflict, ResourceLease, canonical_path, cla
 WORKFLOW_IDS = ("book-1", "book-2", "book-3", "book-4")
 
 SESSION_METHODS = frozenset({
-    "get_initial_state", "save_settings", "choose_folder", "start_batch", "stop_process",
+    "get_initial_state", "save_settings", "choose_folder", "choose_layout_profile", "full_reflow_saved", "start_batch", "stop_process",
     "continue_manual_intervention", "cancel_auto_next", "run_auto_next_now", "list_accounts",
     "select_account", "add_account", "rename_account", "remove_account", "login_account",
     "open_output_folder", "copy_log", "export_log", "clear_log", "confirm_existing_output",
@@ -101,8 +101,8 @@ class SessionManager:
         api = self.sessions[session_id or "book-1"]
         # A native dialog may remain open for minutes. It must not stop the
         # other workers' event draining or timer callbacks.
-        if method == "choose_folder":
-            return api.choose_folder(*args)
+        if method in {"choose_folder", "choose_layout_profile", "full_reflow_saved"}:
+            return getattr(api, method)(*args)
         if method in {"minimize_window", "toggle_maximize_window", "close_window", "move_window"}:
             return getattr(self.sessions["book-1"], method)(*args)
         with self._lock:

@@ -1,0 +1,19 @@
+{
+  "width": 1200,
+  "height": null,
+  "inner": 110,
+  "outer": 85,
+  "top": 110,
+  "bottom": 100,
+  "font": "Times New Roman",
+  "math_font": "Cambria Math",
+  "body_size": 24,
+  "title_size": 28,
+  "line_height": 1.25,
+  "paragraph_gap": 6,
+  "indent": 24,
+  "math_gap": 6,
+  "page_number": null,
+  "chapter": null,
+  "decoration": false
+}

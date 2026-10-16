@@ -241,6 +241,18 @@ class CheckpointTests(unittest.TestCase):
 
 
 class FallbackCoordinatorTests(unittest.TestCase):
+    def test_upload_quota_retries_same_image_on_next_account(self):
+        import run_chatgpt_batch_books34 as isolated
+        for module in (worker, isolated):
+            with self.subTest(worker=module.__name__):
+                self._check_quota_fallback(module, upload_quota=True)
+
+    def test_upload_quota_waits_without_failing_image_when_fallback_unavailable(self):
+        import run_chatgpt_batch_books34 as isolated
+        for module in (worker, isolated):
+            with self.subTest(worker=module.__name__):
+                self._check_quota_fallback(module, upload_quota=True, no_fallback=True)
+
     def test_quota_retries_same_image_on_next_account_and_counts_once(self):
         import run_chatgpt_batch_books34 as isolated
         for module in (worker, isolated):
@@ -253,7 +265,7 @@ class FallbackCoordinatorTests(unittest.TestCase):
             with self.subTest(worker=module.__name__):
                 self._check_quota_fallback(module, fail_first_image=True)
 
-    def _check_quota_fallback(self, worker, fail_first_image=False):
+    def _check_quota_fallback(self, worker, fail_first_image=False, upload_quota=False, no_fallback=False):
         class Context:
             def __init__(self, page):
                 self.pages = [page]
@@ -282,10 +294,18 @@ class FallbackCoordinatorTests(unittest.TestCase):
         events = []
         quota_notice = ("Bạn hiện đã hết lượt tạo ảnh. " + "Thông báo bổ sung. " * 40
                         + "\nGiới hạn được đặt lại sau 5 giờ.")
+        if upload_quota:
+            quota_notice = "Get Plus for more uploads\nOr wait 18 hours to upload again"
 
         def fake_process(page, _indices, image):
             process_calls.append((page, image.name))
             if len(process_calls) == 1:
+                if upload_quota:
+                    with patch.object(worker, "wait_if_cloudflare"), patch.object(
+                        worker.composer, "upload",
+                        side_effect=worker.composer.UploadQuotaError(quota_notice, detected_at=1234),
+                    ):
+                        worker.upload_image(page, image, service="chatgpt")
                 raise worker.QuotaExhaustedError(quota_notice)
             if fail_first_image and len(process_calls) == 2:
                 raise RuntimeError("Image download failed")
@@ -307,20 +327,33 @@ class FallbackCoordinatorTests(unittest.TestCase):
              ]))
             stack.enter_context(patch.object(worker, "CFG", {"auto_account_fallback_enabled": True}))
             stack.enter_context(patch.object(worker, "launch_persistent_context", return_value=first_context))
-            stack.enter_context(patch.object(worker, "open_existing_chatgpt_account", return_value=(second_context, second_page)))
+            stack.enter_context(patch.object(worker, "open_existing_chatgpt_account", return_value=(None, None) if no_fallback else (second_context, second_page)))
             stack.enter_context(patch.object(worker, "minimize_own_browser"))
             stack.enter_context(patch.object(worker, "login_if_needed", return_value=authenticated_page))
             stack.enter_context(patch.object(worker, "process_one", side_effect=fake_process))
             stack.enter_context(patch.object(worker, "write_job_checkpoint"))
-            stack.enter_context(patch.object(worker, "write_progress"))
-            stack.enter_context(patch.object(worker, "finish_batch_result", return_value=0))
+            progress = stack.enter_context(patch.object(worker, "write_progress"))
+            finish = stack.enter_context(patch.object(worker, "finish_batch_result", return_value=4 if no_fallback else 0))
             stack.enter_context(patch.object(worker, "emit_account_event", side_effect=lambda event, **data: events.append((event, data))))
             stack.enter_context(patch.object(worker, "sync_playwright", return_value=PlaywrightScope(fake_playwright)))
             stack.enter_context(patch.object(worker, "print"))
             stack.enter_context(patch.object(worker, "sleep"))
-            self.assertEqual(worker.main(), 0)
+            self.assertEqual(worker.main(), 4 if no_fallback else 0)
 
         initial_page = first_page if worker.__name__ == "run_chatgpt_batch_books34" else authenticated_page
+        if no_fallback:
+            self.assertEqual(process_calls, [(initial_page, "01_101.jpg")])
+            progress.assert_not_called()
+            result = finish.call_args.args[0]
+            self.assertTrue(result["waiting_quota"])
+            self.assertEqual(result["waiting_image"], "01_101.jpg")
+            self.assertEqual(result["failure_count"], 0)
+            self.assertEqual(result["completed_count"], 0)
+            self.assertEqual(events[0][1]["quota_kind"], "upload")
+            self.assertEqual(events[0][1]["evidence"], quota_notice)
+            self.assertFalse(any(event[0] == "account_image_created" for event in events))
+            self.assertTrue(first_context.closed)
+            return
         self.assertEqual(
             [(page, name) for page, name in process_calls],
             [(initial_page, "01_101.jpg"), (second_page, "01_101.jpg"), (second_page, "02_102.jpg")],
@@ -331,6 +364,9 @@ class FallbackCoordinatorTests(unittest.TestCase):
                          ["02_102.jpg"] if fail_first_image else ["01_101.jpg", "02_102.jpg"])
         self.assertTrue(all(event[1]["account_id"] == "two" for event in created))
         self.assertEqual(events[0][1]["evidence"], quota_notice)
+        if upload_quota:
+            self.assertEqual(events[0][1]["quota_kind"], "upload")
+            self.assertEqual(events[0][1]["detected_at"], 1234)
         self.assertTrue(first_context.closed)
 
 

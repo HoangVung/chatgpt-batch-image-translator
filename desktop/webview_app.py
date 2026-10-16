@@ -57,6 +57,12 @@ class WebBridge:
     def choose_folder(self, kind, session_id=None):
         return self._call("choose_folder", (kind,), session_id)
 
+    def choose_layout_profile(self, session_id=None):
+        return self._call("choose_layout_profile", session_id=session_id)
+
+    def full_reflow_saved(self, output_folder=None, session_id=None):
+        return self._call("full_reflow_saved", (output_folder,), session_id)
+
     def start_batch(self, mode, session_id=None):
         return self._call("start_batch", (mode,), session_id)
 

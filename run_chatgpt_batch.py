@@ -16,6 +16,7 @@ from PIL import Image
 from playwright.sync_api import sync_playwright, Error as PlaywrightError
 from progress_utils import FAILED_STATUSES, read_latest_progress
 from browser_profiles import prepare_profile_dir
+import books34_composer as composer
 from worker_control import (
     WorkerStopRequested, check_stop_requested, cooperative_sleep, wait_for_continue,
 )
@@ -279,12 +280,14 @@ PROGRESS_FILE = os.path.join(DOWNLOAD_FOLDER, "progress.csv")
 
 
 class QuotaExhaustedError(RuntimeError):
-    """The active ChatGPT account cannot generate another image right now."""
+    """The active ChatGPT account cannot upload or generate an image right now."""
 
-    def __init__(self, evidence, detected_at=None):
+    def __init__(self, evidence, detected_at=None, quota_kind="image"):
         self.detected_at = time.time() if detected_at is None else detected_at
         self.evidence = str(evidence or "").strip()
-        super().__init__("Tài khoản ChatGPT đã hết lượt tạo ảnh")
+        self.quota_kind = quota_kind
+        super().__init__("Tài khoản ChatGPT đã hết lượt tải tệp lên" if quota_kind == "upload"
+                         else "Tài khoản ChatGPT đã hết lượt tạo ảnh")
 
 
 def sleep(s):
@@ -999,27 +1002,13 @@ def upload_image(page, img, service=SERVICE):
 
         raise Exception("Không tìm thấy nút 'Tải tệp lên' để gửi ảnh lên Gemini")
     else:
+        wait_if_cloudflare(page)
         try:
-            page.locator("#upload-files").set_input_files(str(img), timeout=8000)
-            print("✓ Upload bằng #upload-files")
-            sleep(6)
-            return
-        except Exception:
-            pass
-
-        file_inputs = page.locator('input[type="file"]')
-        count = file_inputs.count()
-
-        for i in range(count):
-            try:
-                file_inputs.nth(i).set_input_files(str(img), timeout=8000)
-                print(f"✓ Upload bằng input thứ {i}")
-                sleep(6)
-                return
-            except Exception:
-                continue
-
-        raise Exception("Không upload được ảnh")
+            composer.upload(page, img)
+        except composer.UploadQuotaError as exc:
+            print("⚠ ChatGPT đã hết lượt tải tệp lên: " + exc.evidence)
+            raise QuotaExhaustedError(exc.evidence, detected_at=exc.detected_at,
+                                     quota_kind="upload") from exc
 
 
 def wait_upload_attached(page, timeout=90):
@@ -1032,6 +1021,12 @@ def wait_upload_attached(page, timeout=90):
 
     while time.time() - start < timeout:
         wait_if_cloudflare(page)
+
+        if SERVICE == "chatgpt":
+            evidence = composer.get_upload_quota_evidence(page)
+            if evidence:
+                print("⚠ ChatGPT đã hết lượt tải tệp lên: " + evidence)
+                raise QuotaExhaustedError(evidence, quota_kind="upload")
 
         try:
             ok = page.evaluate("""
@@ -1523,6 +1518,12 @@ def send_prompt(page, text, max_send_attempts=4):
                 page.keyboard.type(text, delay=30)
                 sleep(1)
 
+            if text in (PROMPT_DICH, PROMPT_TAO_ANH) and SERVICE == "chatgpt" and os.environ.get("BATCH_PROVENANCE_EVENTS") == "1":
+                try:
+                    from translation_evidence import observe_safely
+                    observe_safely(page, "translation_before_send" if text == PROMPT_DICH else "generation_before_send", prompt=text)
+                except Exception:
+                    pass
             action_done = False
 
             if click_send_button(page):
@@ -1535,6 +1536,12 @@ def send_prompt(page, text, max_send_attempts=4):
 
             if action_done and verify_prompt_sent(page, text, timeout=SEND_VERIFY_TIMEOUT):
                 print("✓ Prompt đã được gửi")
+                if text in (PROMPT_DICH, PROMPT_TAO_ANH) and SERVICE == "chatgpt" and os.environ.get("BATCH_PROVENANCE_EVENTS") == "1":
+                    try:
+                        from translation_evidence import observe_safely
+                        observe_safely(page, "translation_sent" if text == PROMPT_DICH else "generation_sent", prompt=text)
+                    except Exception:
+                        pass
                 sleep(2)
                 return True
 
@@ -2045,6 +2052,13 @@ def run_dich_step(page):
         print(f"→ Dịch lần {attempt}")
 
         before_response = get_assistant_response_signature(page)
+        evidence_baseline = None
+        if SERVICE == "chatgpt" and os.environ.get("BATCH_TRANSLATION_EVIDENCE_DIR"):
+            try:
+                from translation_evidence import checkpoint_safely
+                evidence_baseline = checkpoint_safely(page)
+            except Exception:
+                pass
         send_prompt(page, PROMPT_DICH)
 
         if wait_response_after_send(
@@ -2054,6 +2068,18 @@ def run_dich_step(page):
             resend_text=PROMPT_DICH,
             before_signature=before_response
         ):
+            if SERVICE == "chatgpt" and os.environ.get("BATCH_TRANSLATION_EVIDENCE_DIR"):
+                try:
+                    from translation_evidence import capture_safely
+                    capture_safely(page, evidence_baseline, PROMPT_DICH)
+                except Exception:
+                    pass
+            if SERVICE == "chatgpt" and os.environ.get("BATCH_PROVENANCE_EVENTS") == "1":
+                try:
+                    from translation_evidence import observe_safely
+                    observe_safely(page, "translation_complete")
+                except Exception:
+                    pass
             return True
 
         print("⚠ Bước Dịch quá thời gian → thử lại")
@@ -2158,6 +2184,12 @@ def try_create_image(page, old_imgs):
             )
             if late_image:
                 print("✓ Nhận được ảnh xuất hiện muộn; dùng kết quả đã tạo.")
+                if SERVICE == "chatgpt" and os.environ.get("BATCH_PROVENANCE_EVENTS") == "1":
+                    try:
+                        from translation_evidence import observe_safely
+                        observe_safely(page, "generation_complete", asset_url=late_image)
+                    except Exception:
+                        pass
                 return late_image
         print(f"→ Tạo ảnh lần {attempt}")
 
@@ -2199,6 +2231,12 @@ def try_create_image(page, old_imgs):
         )
 
         if img_url:
+            if SERVICE == "chatgpt" and os.environ.get("BATCH_PROVENANCE_EVENTS") == "1":
+                try:
+                    from translation_evidence import observe_safely
+                    observe_safely(page, "generation_complete", asset_url=img_url)
+                except Exception:
+                    pass
             return img_url
 
         # Trước khi retry lần sau, chờ chắc chắn ChatGPT đã thật sự dừng.
@@ -2484,6 +2522,12 @@ def download_image(page, url, path):
         finally:
             temp_path.unlink(missing_ok=True)
         print(f"✓ Đã lưu ảnh: {destination.resolve()} ({len(data):,} byte)")
+        if SERVICE == "chatgpt" and os.environ.get("BATCH_PROVENANCE_EVENTS") == "1":
+            try:
+                from translation_evidence import observe_safely
+                observe_safely(page, "download_complete", asset_url=url, downloaded=destination)
+            except Exception:
+                pass
         return
 
     raise RuntimeError("Không tải được ảnh kết quả qua các cách: " + "; ".join(errors))
@@ -2495,6 +2539,14 @@ def process_one(page, image_indices, img):
     save_path = os.path.join(DOWNLOAD_FOLDER, save_name)
 
     print(f"\n--- {index}: {img.name} → {save_name} ---")
+
+    evidence_session = None
+    if SERVICE == "chatgpt" and os.environ.get("BATCH_TRANSLATION_EVIDENCE_DIR"):
+        try:
+            from translation_evidence import begin_safely
+            evidence_session = begin_safely(page, img, os.environ["BATCH_TRANSLATION_EVIDENCE_DIR"])
+        except Exception:
+            pass
 
     reset_chat(page)
     upload_image(page, img)
@@ -2520,6 +2572,24 @@ def process_one(page, image_indices, img):
     if is_valid_image_file(save_path):
         print("✓ DONE")
         write_progress(index, img.name, save_name, "done", "OK")
+        layout_report = None
+        if SERVICE == "chatgpt" and os.environ.get("BATCH_LAYOUT_PROFILE"):
+            # Optional local post-processing runs only after translation is done.
+            try:
+                from layout_pipeline import process_download_safely
+                layout_report = process_download_safely(img, save_path, os.environ["BATCH_LAYOUT_PROFILE"])
+            except Exception as exc:
+                # Never retry ChatGPT because an optional layout step failed.
+                try:
+                    print(f"[layout] Post-processing unavailable; downloaded image retained ({type(exc).__name__})")
+                except Exception:
+                    pass
+        if evidence_session is not None:
+            try:
+                from translation_evidence import finalize_safely
+                finalize_safely(evidence_session, img, save_path, layout_report)
+            except Exception:
+                pass
     else:
         raise Exception(f"File ảnh tải về không hợp lệ: {save_path}")
 
@@ -2660,11 +2730,13 @@ def main():
                                 image=img.name,
                                 evidence=quota_error.evidence,
                                 detected_at=quota_error.detected_at,
+                                quota_kind=quota_error.quota_kind,
                             )
                             account_states[current_account["id"]] = {
                                 "name": current_account["name"],
                                 "state": "quota_exhausted",
                                 "evidence": quota_error.evidence,
+                                "quota_kind": quota_error.quota_kind,
                             }
                             write_job_checkpoint(
                                 job_id=job_id,

@@ -619,6 +619,30 @@ button:focus-visible,
   box-shadow: 0 0 0 4px var(--focus-ring);
 }
 
+.layout-settings {
+  margin-top: var(--spacing-3);
+  padding-bottom: var(--spacing-3);
+  border-bottom: 1px solid var(--divider);
+}
+
+.layout-settings > .toggle-row {
+  min-height: 28px;
+  color: var(--text-primary);
+}
+
+.layout-hint {
+  margin: 4px 0 0;
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.layout-profile-options {
+  display: grid;
+  gap: var(--spacing-2);
+  margin-top: var(--spacing-3);
+}
+
 .paths {
   display: grid;
   gap: var(--spacing-3);

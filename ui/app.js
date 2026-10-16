@@ -241,6 +241,12 @@ function updatePathPresentation() {
     input.title = input.value || "";
     input.classList.toggle("is-empty", !input.value.trim());
   });
+  $("#layout-profile").title = $("#layout-profile").value || "";
+}
+
+function renderLayoutOptions() {
+  $("#layout-settings").classList.toggle("hidden", $("#service").value !== "chatgpt");
+  $("#layout-profile-options").classList.toggle("hidden", !$("#layout-consistency").checked);
 }
 
 function renderText() {
@@ -267,6 +273,9 @@ function renderSettings() {
   $("#output-folder").value = settings.download_folder;
   $("#profile-folder").value = settings.profile_dir;
   $("#fallback").checked = !!settings.auto_account_fallback_enabled;
+  $("#layout-consistency").checked = !!settings.layout_consistency_enabled;
+  $("#layout-profile").value = settings.layout_profile_path || "";
+  renderLayoutOptions();
   $("#auto-next").checked = !!settings.auto_next_enabled;
   $("#auto-delay").value = settings.auto_next_delay_minutes;
   $("#language").value = settings.language;
@@ -306,6 +315,8 @@ function formPayload() {
     auto_next_enabled: $("#auto-next").checked,
     auto_next_delay_minutes: $("#auto-delay").value,
     auto_account_fallback_enabled: $("#fallback").checked,
+    layout_consistency_enabled: $("#layout-consistency").checked,
+    layout_profile_path: $("#layout-profile").value,
     service: $("#service").value,
     theme: $("#theme").value,
     language: $("#language").value,
@@ -337,7 +348,7 @@ function renderController() {
   const total = controller.progress_total || 0;
   const percent = total ? done / total * 100 : 0;
   const running = !!controller.running;
-  const launchPending = !!state.launchPending;
+  const launchPending = !!state.launchPending || !!state.reflowPending;
   const manual = !!controller.manual_action_required;
   const autoNext = !!controller.auto_next_active;
   setText($("#active-book"), t("book_tab", {number: state.id?.split("-").at(-1) || 1}));
@@ -346,7 +357,7 @@ function renderController() {
   const time = `${String(Math.floor(remaining / 60)).padStart(2, "0")}:${String(remaining % 60).padStart(2, "0")}`;
   setText($("#countdown"), controller.status?.key === "auto_countdown" ? t("auto_countdown", controller.status.params) : t("auto_countdown", {time}));
   $$('#configuration-card input, #configuration-card select, #configuration-card button').forEach((node) => {
-    setProperty(node, "disabled", running || launchPending || (node.id === "confirm-output" && autoNext));
+    setProperty(node, "disabled", running || launchPending || (["confirm-output", "full-reflow-saved"].includes(node.id) && autoNext));
   });
 
   document.body.classList.toggle("is-running", running);
@@ -367,6 +378,7 @@ function renderController() {
   setProperty($("#run-indicator"), "title", t(controller.status?.key || "ready", controller.status?.params));
   const statusEl = $("#status");
   if (statusEl) setAttribute(statusEl, "data-state", manual ? "warning" : running ? "running" : "idle");
+  setText($("#full-reflow-status"), state.reflowPending ? t("full_reflow_running") : state.reflowResult ? t("full_reflow_done", state.reflowResult) : "");
   renderStatus();
   renderTabs();
 }
@@ -470,6 +482,35 @@ async function initialize() {
 }
 
 function bind() {
+  $("#full-reflow-saved").addEventListener("click", async () => {
+    const target = state;
+    if (target.controller.running || target.controller.auto_next_active || target.launchPending || target.reflowPending) return;
+    const output = $("#output-folder").value;
+    target.reflowPending = true;
+    renderController();
+    try {
+      const result = await sessionApi(target, "full_reflow_saved", output);
+      if (!result.cancelled) target.reflowResult = {pages: result.pages, captures: result.succeeded, failed: result.failed, path: result.output};
+    } catch (error) { showError(error, target); }
+    finally {
+      target.reflowPending = false;
+      if (target === state) renderController();
+    }
+  });
+  $("#layout-consistency").addEventListener("change", renderLayoutOptions);
+  $("#layout-profile").addEventListener("input", updatePathPresentation);
+  $("#layout-profile-browse").addEventListener("click", async () => {
+    const target = state;
+    if (target.controller.running || target.launchPending) return;
+    captureDraft(target);
+    try {
+      const result = await sessionApi(target, "choose_layout_profile");
+      if (!result.cancelled) {
+        target.draft = {...(target.draft || {}), layout_profile_path: result.path};
+        if (target === state) renderSettings();
+      }
+    } catch (error) { showError(error, target); }
+  });
   $("#save").addEventListener("click", () => {
     const target = state;
     save(true, target).catch((error) => showError(error, target));
@@ -564,6 +605,7 @@ function bind() {
       $("#profile-folder").value = state.settings.gemini_profile_dir;
     }
     $("#accounts-card").classList.toggle("hidden", service !== "chatgpt");
+    renderLayoutOptions();
     captureDraft();
     updatePathPresentation();
   });

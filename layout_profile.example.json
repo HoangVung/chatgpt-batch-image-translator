@@ -1,0 +1,61 @@
+{
+  "enabled": false,
+  "qc_enabled": true,
+  "normalize_enabled": true,
+  "target_size": [
+    1600,
+    2400
+  ],
+  "margins": [
+    100,
+    100,
+    100,
+    140
+  ],
+  "content_region": [
+    100,
+    100,
+    1500,
+    2260
+  ],
+  "page_number_region": null,
+  "approved_sample": null,
+  "output_dir": "layout_results",
+  "annotate": false,
+  "thresholds": {
+    "dimension_warning": 0.05,
+    "aspect_warning": 0.025,
+    "aspect_fail": 0.15,
+    "margin_warning": 0.04,
+    "sample_margin_warning": 0.04,
+    "edge_warning": 0.015,
+    "edge_fail": 0.002,
+    "min_ink_fraction": 0.001,
+    "ink_difference_warning": 0.12,
+    "whitespace_band_warning": 0.18,
+    "title_height_warning": 0.025,
+    "header_footer_occupancy_warning": 0.02
+  },
+  "max_pixels": 40000000,
+  "ink_luma_threshold": 225,
+  "source_aware_enabled": false,
+  "source_thresholds": {
+    "aspect_warning": 0.04,
+    "margin_warning": 0.06,
+    "position_warning": 0.06,
+    "width_warning": 0.1,
+    "header_footer_warning": 0.045,
+    "density_warning": 0.1,
+    "whitespace_warning": 0.16,
+    "geometry_size_warning": 0.25,
+    "geometry_structure_warning": 0.3,
+    "typography_warning": 0.35,
+    "edge_warning": 0.01,
+    "min_confidence": 0.7
+  },
+  "mirrored_layout": true,
+  "header_alignment": "mirrored",
+  "footer_alignment": "mirrored",
+  "canonical_header": null,
+  "sample_page_number": null
+}

@@ -1,4 +1,4 @@
-"""Track image-quota recovery estimates independently of batch progress."""
+"""Track account-quota recovery estimates independently of batch progress."""
 from __future__ import annotations
 
 import json
@@ -12,7 +12,7 @@ from pathlib import Path
 
 VIETNAM = timezone(timedelta(hours=7))
 _TOKEN = re.compile(r"(\d+(?:[.,]\d+)?)\s*(hours?|hrs?|giờ|minutes?|mins?|phút|days?|ngày|seconds?|secs?|giây)\b", re.I)
-_START = re.compile(r"(?:resets?\s+in|try\s+again\s+in|có\s+thể\s+tạo[^.!?]*?sau|đặt\s+lại[^.!?]*?sau|thử\s+lại[^.!?]*?sau)\s+", re.I)
+_START = re.compile(r"(?:resets?\s+in|try\s+again\s+in|có\s+thể\s+tạo[^.!?]*?sau|đặt\s+lại[^.!?]*?sau|thử\s+lại[^.!?]*?sau|(?P<upload_wait>\bwait))\s+", re.I)
 
 
 def reset_delay_seconds(evidence):
@@ -34,6 +34,8 @@ def reset_delay_seconds(evidence):
             found = True
             separator = re.match(r"\s*(?:(?:and|và|,)\s*)?", tail[match.end():], re.I)
             position = match.end() + separator.end()
+        if start.group("upload_wait") and not re.match(r"to\s+upload\s+again\b", tail[position:], re.I):
+            continue
         if found and math.isfinite(total) and 0 <= total <= 366 * 86400:
             return total
     return None
@@ -125,7 +127,6 @@ class QuotaLimits:
             changed = due != self._due_ids
             self._due_ids = due
             return changed
-
 
     def snapshot(self, accounts=()):
         names = {str(item["id"]): item["name"] for item in accounts}

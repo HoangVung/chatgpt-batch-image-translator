@@ -22,6 +22,8 @@ SETTINGS_KEYS = {
     "chatgpt_accounts",
     "active_chatgpt_account_id",
     "auto_account_fallback_enabled",
+    "layout_consistency_enabled",
+    "layout_profile_path",
     "batch_size",
     "start_from",
     "auto_next_enabled",
@@ -39,11 +41,13 @@ FORM_KEYS = {
     "auto_next_enabled",
     "auto_next_delay_minutes",
     "auto_account_fallback_enabled",
+    "layout_consistency_enabled",
+    "layout_profile_path",
     "theme",
     "language",
     "service",
 }
-STRING_FORM_KEYS = FORM_KEYS - {"auto_next_enabled", "auto_account_fallback_enabled"}
+STRING_FORM_KEYS = FORM_KEYS - {"auto_next_enabled", "auto_account_fallback_enabled", "layout_consistency_enabled"}
 
 
 def get_app_dir() -> Path:
@@ -71,6 +75,8 @@ def make_default_settings(data_dir: Path) -> dict[str, Any]:
         }],
         "active_chatgpt_account_id": "default",
         "auto_account_fallback_enabled": True,
+        "layout_consistency_enabled": False,
+        "layout_profile_path": "",
         "batch_size": "10",
         "start_from": "",
         "auto_next_enabled": True,
@@ -125,6 +131,33 @@ def save_settings(path: Path, settings: Mapping[str, Any]) -> None:
 def write_launch_snapshot(settings: Mapping[str, Any], directory: Path) -> Path:
     path = directory / (uuid.uuid4().hex + ".json")
     save_settings(path, settings)
+    return path.resolve()
+
+
+def write_layout_launch_snapshot(settings: Mapping[str, Any], settings_file: Path) -> Path | None:
+    """Freeze one book's layout profile for this launch without modifying its source."""
+    if settings.get("layout_consistency_enabled") is not True:
+        return None
+    from dataclasses import asdict, replace
+    from layout_profile import LayoutProfile, load_profile
+
+    profile_path = str(settings.get("layout_profile_path", "")).strip()
+    if profile_path:
+        profile = replace(load_profile(profile_path), enabled=True)
+    else:
+        output = str(settings.get("download_folder", "")).strip()
+        if not output:
+            raise ValueError("Choose an output folder before enabling book layout consistency")
+        profile = LayoutProfile(enabled=True, output_dir=Path(output).resolve() / "layout_results")
+    if profile.approved_sample is not None and not profile.approved_sample.is_file():
+        raise ValueError(f"Approved layout sample not found: {profile.approved_sample}")
+    payload = asdict(profile)
+    payload["output_dir"] = str(profile.output_dir.resolve())
+    payload["approved_sample"] = str(profile.approved_sample.resolve()) if profile.approved_sample else None
+    path = settings_file.with_suffix(".layout.json")
+    if path.exists():
+        raise FileExistsError(f"Layout launch snapshot already exists: {path}")
+    save_settings(path, payload)
     return path.resolve()
 
 
@@ -187,7 +220,7 @@ def apply_form_settings(current: dict[str, Any], payload: Any, data_dir: Path) -
         value = payload[key]
         if not isinstance(value, str) or "\0" in value or len(value) > 32_768:
             raise ValueError(f"invalid value for {key}")
-    for key in ("auto_next_enabled", "auto_account_fallback_enabled"):
+    for key in ("auto_next_enabled", "auto_account_fallback_enabled", "layout_consistency_enabled"):
         if key in payload and not isinstance(payload[key], bool):
             raise ValueError(f"invalid value for {key}")
     if payload.get("service", current.get("service")) not in {"chatgpt", "gemini"}:
@@ -248,6 +281,12 @@ def build_process_launch(
         env["BATCH_TRANSLATOR_WORKER_VARIANT"] = variant
     # Never inherit a snapshot belonging to the process that launched this UI.
     env.pop("BATCH_TRANSLATOR_SETTINGS_FILE", None)
+    # Desktop state controls this feature independently for each book.
+    env.pop("BATCH_LAYOUT_PROFILE", None)
+    if service == "chatgpt" and mode != "login" and settings.get("layout_consistency_enabled") is True:
+        if settings_file is None or not settings_file.with_suffix(".layout.json").is_file():
+            raise ValueError("Layout launch snapshot is not ready")
+        env["BATCH_LAYOUT_PROFILE"] = str(settings_file.with_suffix(".layout.json").resolve())
     if settings_file is not None:
         env["BATCH_TRANSLATOR_SETTINGS_FILE"] = str(settings_file.resolve())
     env.update({

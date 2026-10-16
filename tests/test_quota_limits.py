@@ -21,11 +21,32 @@ class QuotaLimitTests(unittest.TestCase):
             ("Bạn có thể tạo thêm ảnh sau 5 giờ.", 18000),
             ("Giới hạn được đặt lại sau 2 giờ 15 phút.", 8100),
             ("The limit resets in 1 day, 2 hours.", 93600),
+            ("Get Plus for more uploads\nOr wait 18 hours to upload again", 64800),
+            ("Or wait 1 hour and 30 minutes to upload again.", 5400),
+            ("Or wait 1.5 hours to upload again.", 5400),
             ("You've hit the limit.", None),
             ("You created 10 images in 5 hours. Limit reached.", None),
+            ("Please wait 18 hours.", None),
+            ("Get Plus for more uploads. Wait 18 hours for a reply.", None),
+            ("Wait 18 hours. You can try to upload again later.", None),
+            ("Wait a while to upload again.", None),
         ]:
             with self.subTest(notice=notice):
                 self.assertEqual(reset_delay_seconds(notice), expected)
+
+    def test_upload_wait_estimate_crosses_midnight_and_survives_reopen(self):
+        observed = datetime.fromisoformat("2026-10-10T11:51:00+07:00").timestamp()
+        notice = "Get Plus for more uploads\nOr wait 18 hours to upload again"
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "quota_limits.json"
+            store = QuotaLimits(path, clock=lambda: observed + 120)
+            store.record({"account_id": "ngan-personal", "account_name": "Ngan-Personal",
+                          "detected_at": observed, "quota_kind": "upload", "evidence": notice})
+            restored = QuotaLimits(path, clock=lambda: observed + 120).snapshot()
+            self.assertEqual(restored[0]["detected_vn"], "10/10/2026 11:51")
+            self.assertEqual(restored[0]["reset_vn_full"], "11/10/2026 05:51")
+            self.assertEqual(restored[0]["reset_at"], observed + 64800)
+            self.assertFalse(restored[0]["estimate_due"])
 
     def test_vietnam_time_crosses_midnight_and_survives_reopen(self):
         observed = datetime(2026, 10, 4, 11, 40, tzinfo=timezone.utc).timestamp()
@@ -119,7 +140,6 @@ class QuotaLimitTests(unittest.TestCase):
             self.assertEqual([row["account_id"] for row in QuotaLimits(path).snapshot()], ["due", "future", "unknown"])
             self.assertFalse(store.expire_due())
 
-
     def test_due_estimate_refresh_does_not_write_or_clear_persisted_limits(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "quota_limits.json"
@@ -134,7 +154,6 @@ class QuotaLimitTests(unittest.TestCase):
             self.assertEqual(path.read_bytes(), before)
             self.assertEqual(store.snapshot()[0]["account_id"], "due")
             self.assertEqual(QuotaLimits(path).snapshot()[0]["account_id"], "due")
-
 
     def test_book_files_are_independent(self):
         with tempfile.TemporaryDirectory() as directory:

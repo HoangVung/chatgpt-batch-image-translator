@@ -185,7 +185,6 @@ class WorkflowFrontendTests(unittest.TestCase):
         self.assertIn('Vung-Business', page.locator('#tab-book-1 .workflow-quota').inner_text())
         self.assertNotIn('Vung-Personal', page.locator('#tab-book-1 .workflow-quota').inner_text())
 
-
     def test_recovered_account_row_disappears_in_background_book(self):
         page = self.page
         accounts = [

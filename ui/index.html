@@ -77,6 +77,18 @@
               <label class="field delay-field"><span data-i18n="auto_next_delay">Wait (minutes)</span><input id="auto-delay" inputmode="decimal" autocomplete="off" /></label>
             </div>
 
+            <div id="layout-settings" class="layout-settings">
+              <label class="toggle-row"><input id="layout-consistency" type="checkbox" aria-describedby="layout-hint" /><span class="toggle" aria-hidden="true"></span><span data-i18n="layout_consistency">Book page consistency</span></label>
+              <p id="layout-hint" class="layout-hint" data-i18n="layout_hint">Check and safely normalize downloaded pages. Keep original images.</p>
+              <button id="full-reflow-saved" type="button" data-i18n="full_reflow_saved">Reflow saved translations</button>
+              <p class="layout-hint" data-i18n="full_reflow_hint">Choose a saved translation data folder. Export to a new folder under the current output path.</p>
+              <p id="full-reflow-status" class="layout-hint" role="status" aria-live="polite"></p>
+              <div id="layout-profile-options" class="layout-profile-options hidden">
+                <label class="field path-field"><span data-i18n="layout_profile">Layout profile (optional)</span><span class="input-action"><input id="layout-profile" data-placeholder="layout_profile_default" aria-describedby="layout-profile-hint" /><button id="layout-profile-browse" type="button" data-i18n="browse">Browse</button></span></label>
+                <p id="layout-profile-hint" class="layout-hint" data-i18n="layout_profile_hint">Leave blank for 1600 × 2400 px. Save settings; applies to the next run.</p>
+              </div>
+            </div>
+
             <div class="paths">
               <label class="field path-field"><span data-i18n="source_folder">Source image folder</span><span class="input-action"><input id="source-folder" /><button type="button" data-folder="source" data-i18n="browse">Browse</button></span></label>
               <label class="field path-field"><span data-i18n="output_folder">VN output folder</span><span class="input-action"><input id="output-folder" /><button type="button" data-folder="output" data-i18n="browse">Browse</button></span></label>

@@ -119,7 +119,7 @@ class WebApiTests(unittest.TestCase):
             if not name.startswith("_") and callable(getattr(self.api, name))
         }
         self.assertEqual(public, {
-            "add_account", "cancel_auto_next", "choose_folder", "clear_log", "close_window",
+            "add_account", "cancel_auto_next", "choose_folder", "choose_layout_profile", "full_reflow_saved", "clear_log", "close_window",
             "continue_manual_intervention", "copy_log", "export_log", "get_initial_state",
             "get_platform_capabilities", "list_accounts", "login_account", "minimize_window",
             "open_output_folder", "remove_account", "rename_account", "run_auto_next_now",
@@ -131,7 +131,7 @@ class WebApiTests(unittest.TestCase):
         bridge = WebBridge(self.api)
         public = {name for name in dir(bridge) if not name.startswith("_")}
         self.assertEqual(public, {
-            "add_account", "cancel_auto_next", "choose_folder", "clear_log", "close_window",
+            "add_account", "cancel_auto_next", "choose_folder", "choose_layout_profile", "full_reflow_saved", "clear_log", "close_window",
             "continue_manual_intervention", "copy_log", "export_log", "get_initial_state",
             "get_platform_capabilities", "list_accounts", "login_account", "minimize_window",
             "open_output_folder", "remove_account", "rename_account", "run_auto_next_now",
@@ -358,12 +358,46 @@ class WebApiTests(unittest.TestCase):
                 self.assertEqual(log.count(notice), 1)
                 self.assertNotIn("__ACCOUNT_EVENT__=", log)
 
+    def test_upload_quota_worker_event_preserves_notice_and_localizes_kind(self):
+        from datetime import datetime
+        from desktop.quota_limits import QuotaLimits
+
+        observed = datetime.fromisoformat("2026-10-10T11:51:00+07:00").timestamp()
+        notice = "Get Plus for more uploads\nOr wait 18 hours to upload again"
+        self.api._quota_limits.clock = lambda: observed + 120
+        for language, expected, image_wording in (
+            ("vi", "đã hết lượt tải tệp lên", "đã hết lượt tạo ảnh"),
+            ("en", "exhausted its file upload quota", "exhausted its image quota"),
+        ):
+            with self.subTest(language=language):
+                self.api.settings["language"] = language
+                self.api.controller.clear_log()
+                self.api.controller.handle_worker_output("__ACCOUNT_EVENT__=" + json.dumps({
+                    "event": "account_quota_exhausted", "account_id": "ngan-personal",
+                    "account_name": "Ngan-Personal", "quota_kind": "upload",
+                    "detected_at": observed, "evidence": notice,
+                }, ensure_ascii=False) + "\n")
+                self.api._dispatch_once()
+                log = "".join(self.api.controller.log_history)
+                self.assertIn("Ngan-Personal", log)
+                self.assertIn(expected, log)
+                self.assertNotIn(image_wording, log)
+                self.assertIn("ChatGPT: " + notice, log)
+                self.assertEqual(log.count(notice), 1)
+                self.assertNotIn("__ACCOUNT_EVENT__=", log)
+                updates = [item for item in self.api.sent_events if item["type"] == "quota_limits_changed"]
+                self.assertEqual(updates[-1]["payload"]["accounts"][0]["reset_vn_full"], "11/10/2026 05:51")
+                restored = QuotaLimits(self.data_dir / "quota_limits.json").snapshot()
+                self.assertEqual(restored[0]["account_id"], "ngan-personal")
+                self.assertEqual(restored[0]["reset_at"], observed + 64800)
+
     def test_quota_event_pushes_and_persists_vietnam_estimate(self):
         event = {
             "event": "account_quota_exhausted", "account_id": "personal",
             "account_name": "Vung-Personal", "detected_at": "2026-10-04T11:40:00Z",
             "evidence": "You've hit the Plus plan limit. The limit resets in 10 hours.",
         }
+        self.api._quota_limits.clock = lambda: 1791129600
         self.api._render_account_event(event)
         updates = [item for item in self.api.sent_events if item["type"] == "quota_limits_changed"]
         self.assertEqual(updates[-1]["payload"]["accounts"][0]["reset_vn"], "05/10 04:40")
@@ -397,7 +431,6 @@ class WebApiTests(unittest.TestCase):
         self.assertEqual([row["account_id"] for row in self.api._snapshot()["quota_limits"]], ["due", "future", "unknown"])
         self.assertEqual([row["account_id"] for row in QuotaLimits(self.data_dir / "quota_limits.json").snapshot()], ["due", "future", "unknown"])
 
-
     def test_startup_snapshot_keeps_due_quota_loaded_from_disk(self):
         from desktop.quota_limits import QuotaLimits
 
@@ -411,7 +444,6 @@ class WebApiTests(unittest.TestCase):
         self.assertEqual([row["account_id"] for row in rows], ["due"])
         self.assertTrue(rows[0]["estimate_due"])
         self.assertEqual([row["account_id"] for row in QuotaLimits(path).snapshot()], ["due"])
-
 
     def test_successful_image_clears_only_recovered_account_and_preserves_notice_log(self):
         from desktop.quota_limits import QuotaLimits
